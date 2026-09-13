@@ -21,6 +21,15 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"},
         )
 
+    def exists(self, ids: list[str]) -> bool:
+        """Return True if any of the given chunk IDs already exist."""
+        if not ids:
+            return False
+
+        result = self.collection.get(ids=ids)
+
+        return bool(result.get("ids"))
+
     def add_chunks(
         self,
         chunks: list[str],
@@ -48,6 +57,15 @@ class VectorStore:
             metadatas=metadatas,
             ids=ids,
         )
+    def delete(self, ids: list[str]) -> None:
+        """Delete chunks by their IDs."""
+        if not ids:
+            return
+
+        existing_ids = self.collection.get(ids=ids).get("ids", [])
+
+        if existing_ids:
+            self.collection.delete(ids=existing_ids)
 
     def search(
         self,
@@ -67,6 +85,22 @@ class VectorStore:
             n_results=top_k,
             where=where,
         )
+
+    def get_by_document_id(self, document_id: str) -> dict[str, Any]:
+        """Return all chunks belonging to a document."""
+        if not isinstance(document_id, str):
+            raise TypeError("document_id must be a string")
+
+        if not document_id.strip():
+            raise ValueError("document_id cannot be empty")
+
+        return self.collection.get(
+            where={"document_id": document_id}
+        )
+
+    def get_all_documents(self) -> dict[str, Any]:
+        """Return all stored chunks and metadata."""
+        return self.collection.get()
 
     def count(self) -> int:
         """Return the number of stored chunks."""

@@ -33,7 +33,11 @@ class Retriever:
         if not query.strip():
             raise ValueError("query cannot be empty")
 
-        top_k = top_k or settings.retrieval_top_k
+        top_k = (
+            settings.retrieval_top_k
+            if top_k is None
+            else top_k
+        )
 
         if top_k <= 0:
             raise ValueError("top_k must be greater than zero")

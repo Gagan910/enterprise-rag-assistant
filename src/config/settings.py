@@ -1,3 +1,4 @@
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,11 +10,19 @@ class Settings(BaseSettings):
     embedding_model: str = "all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-    chunk_size: int = 500
-    chunk_overlap: int = 100
+    chunk_size: int = Field(default=500, gt=0)
+    chunk_overlap: int = Field(default=100, ge=0)
 
-    retrieval_top_k: int = 5
-    rerank_top_k: int = 3
+    retrieval_top_k: int = Field(default=5, gt=0)
+    rerank_top_k: int = Field(default=3, gt=0)
+    
+    @model_validator(mode="after")
+    def validate_chunk_overlap(self) -> "Settings":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError(
+                "chunk_overlap must be smaller than chunk_size"
+            )
+        return self
 
     vector_store_path: str = "data/chroma"
     vector_collection_name: str = "documents"
@@ -23,5 +32,5 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-    
+
 settings = Settings()
