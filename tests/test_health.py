@@ -848,6 +848,18 @@ def test_list_documents():
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
+def test_list_documents_returns_generic_error_on_exception():
+    with patch(
+        "src.api.routes.vector_store.get_all_documents",
+        side_effect=RuntimeError("internal database failure"),
+    ):
+        response = client.get("/documents")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Failed to list documents."
+    }
+
 def test_list_documents_contains_sample_document(tmp_path):
     from src.api import routes
 
@@ -985,6 +997,18 @@ def test_get_document_rejects_empty_document_id():
     assert response.status_code == 400
     assert response.json()["detail"] == "document_id cannot be empty."
 
+def test_get_document_returns_generic_error_on_exception():
+    with patch(
+        "src.api.routes.vector_store.get_by_document_id",
+        side_effect=RuntimeError("internal database failure"),
+    ):
+        response = client.get("/documents/test-document-id")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Failed to get document."
+    }
+
 def test_delete_document():
     from src.api import routes
 
@@ -1021,6 +1045,18 @@ def test_delete_document_not_found():
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Document not found."
+
+def test_delete_document_returns_generic_error_on_exception():
+    with patch(
+        "src.api.routes.vector_store.get_by_document_id",
+        side_effect=RuntimeError("internal database failure"),
+    ):
+        response = client.delete("/documents/test-document-id")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Failed to delete document."
+    }
 
 def test_settings_rejects_invalid_chunk_size():
     from src.config.settings import Settings
@@ -1060,7 +1096,7 @@ def test_settings_rejects_invalid_rerank_top_k():
             gemini_api_key="test-key",
             rerank_top_k=0,
         )
-        
+
 def test_settings_rejects_chunk_overlap_equal_to_chunk_size():
     from src.config.settings import Settings
 
@@ -1087,3 +1123,21 @@ def test_settings_rejects_chunk_overlap_greater_than_chunk_size():
             chunk_size=100,
             chunk_overlap=101,
         )
+
+def test_query_returns_generic_error_on_exception():
+    with patch(
+        "src.api.routes.retriever.retrieve",
+        side_effect=RuntimeError("internal database failure"),
+    ):
+        response = client.post(
+            "/query",
+            json={
+                "question": "What is the leave policy?",
+                "top_k": 1,
+            },
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Failed to process the query."
+    }

@@ -51,80 +51,105 @@ def list_documents(
     skip: int = 0,
     limit: int = 100,
 ) -> list[DocumentInfo]:
-    results = vector_store.get_all_documents()
+    try:
+        results = vector_store.get_all_documents()
 
-    metadatas = results.get("metadatas", [])
+        metadatas = results.get("metadatas", [])
 
-    documents: dict[str, DocumentInfo] = {}
+        documents: dict[str, DocumentInfo] = {}
 
-    for metadata in metadatas:
-        document_id = metadata.get("document_id")
-        source = metadata.get("source", "Unknown")
+        for metadata in metadatas:
+            document_id = metadata.get("document_id")
+            source = metadata.get("source", "Unknown")
 
-        if not document_id:
-            continue
+            if not document_id:
+                continue
 
-        if document_id not in documents:
-            documents[document_id] = DocumentInfo(
-                document_id=document_id,
-                source=source,
-                chunk_count=0,
-            )
+            if document_id not in documents:
+                documents[document_id] = DocumentInfo(
+                    document_id=document_id,
+                    source=source,
+                    chunk_count=0,
+                )
 
-        documents[document_id].chunk_count += 1
+            documents[document_id].chunk_count += 1
 
-    return list(documents.values())[skip : skip + limit]
+        return list(documents.values())[skip : skip + limit]
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list documents.",
+        ) from exc
 
 
 @router.get("/documents/{document_id}", response_model=DocumentInfo)
 def get_document(document_id: str) -> DocumentInfo:
-    if not document_id.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="document_id cannot be empty.",
+    try:
+        if not document_id.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="document_id cannot be empty.",
+            )
+
+        results = vector_store.get_by_document_id(document_id)
+
+        metadatas = results.get("metadatas", [])
+
+        if not metadatas:
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found.",
+            )
+
+        source = metadatas[0].get("source", "Unknown")
+
+        return DocumentInfo(
+            document_id=document_id,
+            source=source,
+            chunk_count=len(metadatas),
         )
 
-    results = vector_store.get_by_document_id(document_id)
-
-    metadatas = results.get("metadatas", [])
-
-    if not metadatas:
+    except HTTPException:
+        raise
+    except Exception as exc:
         raise HTTPException(
-            status_code=404,
-            detail="Document not found.",
-        )
-
-    source = metadatas[0].get("source", "Unknown")
-
-    return DocumentInfo(
-        document_id=document_id,
-        source=source,
-        chunk_count=len(metadatas),
-    )
+            status_code=500,
+            detail="Failed to get document.",
+        ) from exc
 
 
 @router.delete("/documents/{document_id}")
 def delete_document(document_id: str) -> dict[str, str]:
-    if not document_id.strip():
+    try:
+        if not document_id.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="document_id cannot be empty.",
+            )
+
+        results = vector_store.get_by_document_id(document_id)
+
+        if not results.get("ids"):
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found.",
+            )
+
+        vector_store.delete(results["ids"])
+
+        return {
+            "message": "Document deleted successfully.",
+            "document_id": document_id,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
         raise HTTPException(
-            status_code=400,
-            detail="document_id cannot be empty.",
-        )
-
-    results = vector_store.get_by_document_id(document_id)
-
-    if not results.get("ids"):
-        raise HTTPException(
-            status_code=404,
-            detail="Document not found.",
-        )
-
-    vector_store.delete(results["ids"])
-
-    return {
-        "message": "Document deleted successfully.",
-        "document_id": document_id,
-    }
+            status_code=500,
+            detail="Failed to delete document.",
+        ) from exc
 
 
 @router.get("/health")
