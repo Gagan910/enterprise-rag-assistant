@@ -740,6 +740,17 @@ def test_query_accepts_document_id():
 
     assert response.status_code == 200
 
+def test_query_rejects_empty_document_id():
+    response = client.post(
+        "/query",
+        json={
+            "question": "What benefits do employees receive?",
+            "document_id": "",
+        },
+    )
+
+    assert response.status_code == 422
+
 def test_query_passes_document_id_filter():
     with patch(
         "src.api.routes.retriever.retrieve",
