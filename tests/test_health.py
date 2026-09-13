@@ -848,6 +848,23 @@ def test_list_documents():
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
+def test_list_documents_rejects_negative_skip():
+    response = client.get("/documents?skip=-1")
+
+    assert response.status_code == 422
+
+
+def test_list_documents_rejects_invalid_limit():
+    response = client.get("/documents?limit=0")
+
+    assert response.status_code == 422
+
+
+def test_list_documents_rejects_excessive_limit():
+    response = client.get("/documents?limit=101")
+
+    assert response.status_code == 422
+
 def test_list_documents_returns_generic_error_on_exception():
     with patch(
         "src.api.routes.vector_store.get_all_documents",
