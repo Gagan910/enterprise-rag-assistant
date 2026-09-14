@@ -23,10 +23,8 @@ class IngestionPipeline:
 
     @staticmethod
     def _document_id(path: Path) -> str:
-        """Generate a deterministic document ID from the file path."""
-        return hashlib.sha256(
-            str(path.resolve()).encode("utf-8")
-        ).hexdigest()[:16]
+        """Generate a deterministic document ID from document content."""
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
     def delete_document(self, file_path: str) -> None:
         """Delete all stored chunks belonging to a document."""
@@ -46,9 +44,9 @@ class IngestionPipeline:
         """Parse, clean, chunk, embed, and store a document."""
 
         path = Path(file_path)
-        document_id = self._document_id(path)
 
         raw_text = parse_document(str(path))
+        document_id = self._document_id(path)
         cleaned_text = clean_text(raw_text)
 
         chunks = chunk_text(

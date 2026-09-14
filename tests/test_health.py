@@ -18,6 +18,8 @@ from src.retrieval.embedder import TextEmbedder
 from src.retrieval.vector_store import VectorStore
 from src.retrieval.retriever import Retriever
 from src.retrieval.reranker import Reranker
+from src.evaluation.dataset import EVALUATION_DATASET
+from src.evaluation.retrieval import evaluate_retrieval
 
 
 client = TestClient(app)
@@ -1169,3 +1171,86 @@ def test_query_returns_generic_error_on_exception():
     assert response.json() == {
         "detail": "Failed to process the query."
     }
+
+def test_evaluate_retrieval_calculates_hit_rate_and_mrr():
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            return [
+                {"metadata": {"source": "other.txt"}},
+                {"metadata": {"source": "sample.txt"}},
+            ]
+
+    dataset = [
+        {
+            "question": "test question",
+            "expected_source": "sample.txt",
+        }
+    ]
+
+    result = evaluate_retrieval(
+        retriever=FakeRetriever(),
+        dataset=dataset,
+        top_k=2,
+    )
+
+    assert result["total_cases"] == 1
+    assert result["hit_rate"] == 1.0
+    assert result["mrr"] == 0.5
+    assert result["results"][0]["rank"] == 2
+    assert result["results"][0]["hit"] is True
+
+
+def test_evaluate_retrieval_handles_missing_source():
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            return [
+                {"metadata": {"source": "other.txt"}},
+            ]
+
+    dataset = [
+        {
+            "question": "test question",
+            "expected_source": "sample.txt",
+        }
+    ]
+
+    result = evaluate_retrieval(
+        retriever=FakeRetriever(),
+        dataset=dataset,
+        top_k=1,
+    )
+
+    assert result["total_cases"] == 1
+    assert result["hit_rate"] == 0.0
+    assert result["mrr"] == 0.0
+    assert result["results"][0]["rank"] is None
+    assert result["results"][0]["hit"] is False
+
+
+def test_evaluate_retrieval_rejects_invalid_top_k():
+    with pytest.raises(
+        ValueError,
+        match="top_k must be greater than 0",
+    ):
+        evaluate_retrieval(
+            retriever=None,
+            dataset=[],
+            top_k=0,
+        )
+
+
+def test_evaluate_retrieval_handles_empty_dataset():
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            raise AssertionError("Retriever should not be called.")
+
+    result = evaluate_retrieval(
+        retriever=FakeRetriever(),
+        dataset=[],
+        top_k=1,
+    )
+
+    assert result["total_cases"] == 0
+    assert result["hit_rate"] == 0.0
+    assert result["mrr"] == 0.0
+    assert result["results"] == []
