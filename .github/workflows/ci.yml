@@ -39,7 +39,7 @@ jobs:
           dvc remote modify --local origin password "$DAGSHUB_TOKEN"
 
       - name: Pull DVC data
-        run: dvc pull
+        run: dvc pull data/sample.txt.dvc
 
       - name: Verify DVC data
         run: |
