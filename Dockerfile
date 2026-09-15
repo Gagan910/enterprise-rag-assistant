@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
 COPY data/.gitkeep ./data/.gitkeep
+COPY models/embedding /app/models/embedding
+COPY models/reranker /app/models/reranker
 
 EXPOSE 8000
 
