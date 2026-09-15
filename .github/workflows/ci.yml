@@ -46,5 +46,9 @@ jobs:
           test -f data/sample.txt
           ls -lh data/sample.txt
 
+      - name: Prepare test vector store
+        run: |
+          python -c "from src.ingestion.ingestion import IngestionPipeline; from src.retrieval.embedder import TextEmbedder; from src.retrieval.vector_store import VectorStore; IngestionPipeline(TextEmbedder(), VectorStore()).ingest('data/sample.txt')"
+
       - name: Run tests
         run: pytest -q
