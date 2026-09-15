@@ -18,7 +18,11 @@ class VectorStore:
         collection_name = collection_name or settings.vector_collection_name
 
         if os.getenv("CHROMA_API_KEY"):
-            self.client = chromadb.CloudClient()
+            self.client = chromadb.CloudClient(
+                api_key=os.environ["CHROMA_API_KEY"],
+                tenant=os.environ["CHROMA_TENANT"],
+                database=os.environ["CHROMA_DATABASE"],
+            )
         else:
             self.client = chromadb.PersistentClient(
                 path=persist_directory
