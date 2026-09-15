@@ -45,6 +45,7 @@ def log_retrieval_evaluation(
         mlflow.log_params(
             {
                 "top_k": top_k,
+                "dvc_sample_txt_md5": "2581f22f54f96bf7c04a4672e6aca721",
                 "embedding_model": settings.embedding_model,
                 "reranker_model": settings.reranker_model,
                 "chunk_size": settings.chunk_size,
@@ -67,7 +68,8 @@ def log_retrieval_evaluation(
             }
         )
 
-        with open("retrieval_evaluation.json", "w", encoding="utf-8") as file:
-            json.dump(metrics["results"], file, indent=2)
+        if "results" in metrics:
+            with open("retrieval_evaluation.json", "w", encoding="utf-8") as file:
+                json.dump(metrics["results"], file, indent=2)
 
-        mlflow.log_artifact("retrieval_evaluation.json")
+            mlflow.log_artifact("retrieval_evaluation.json")
