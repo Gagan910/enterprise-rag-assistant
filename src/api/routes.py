@@ -299,6 +299,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         )
 
     except Exception as exc:
+        print(f"QUERY ERROR: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(
             status_code=500,
             detail="Failed to process the query.",
