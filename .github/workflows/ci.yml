@@ -14,6 +14,8 @@ jobs:
 
     env:
       GEMINI_API_KEY: ci-test-key
+      DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+      DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -26,6 +28,12 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install DVC
+        run: pip install dvc
+
+      - name: Pull DVC data
+        run: dvc pull
 
       - name: Run tests
         run: pytest -q
