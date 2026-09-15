@@ -55,6 +55,14 @@ class Retriever:
         distances = results.get("distances", [[]])[0]
         ids = results.get("ids", [[]])[0]
 
+        print(
+            f"RETRIEVAL DEBUG: documents={len(documents)}, "
+            f"metadatas={len(metadatas)}, "
+            f"distances={len(distances)}, "
+            f"ids={len(ids)}",
+            flush=True,
+        )
+
         retrieved_chunks = []
 
         for document, metadata, distance, chunk_id in zip(
@@ -73,7 +81,9 @@ class Retriever:
             )
 
         if self.reranker and retrieved_chunks:
-            rerank_k = rerank_top_k or settings.rerank_top_k
+            rerank_k = (
+                rerank_top_k or settings.rerank_top_k
+            )
 
             return self.reranker.rerank(
                 query=query,
@@ -82,3 +92,4 @@ class Retriever:
             )
 
         return retrieved_chunks
+    
