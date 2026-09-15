@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
 COPY data/.gitkeep ./data/.gitkeep
-COPY models/embedding /app/models/embedding
-COPY models/reranker /app/models/reranker
+
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/all-MiniLM-L6-v2', local_dir='/app/models/embedding')" \
+    && python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='cross-encoder/ms-marco-MiniLM-L-6-v2', local_dir='/app/models/reranker')"
 
 EXPOSE 8000
 
