@@ -23,6 +23,60 @@ from src.evaluation.retrieval import evaluate_retrieval
 
 
 client = TestClient(app)
+
+def test_upload_document():
+    from src.api import routes
+
+    with (
+        patch.object(
+            routes.vector_store,
+            "get_by_document_id",
+            return_value={"metadatas": []},
+        ),
+        patch.object(
+            routes.ingestion_pipeline,
+            "ingest",
+            return_value=1,
+        ) as mock_ingest,
+    ):
+        response = client.post(
+            "/documents/upload",
+            files={
+                "file": (
+                    "test-upload.txt",
+                    b"Employees receive 20 days of paid annual leave.",
+                    "text/plain",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["source"] == "test-upload.txt"
+    assert data["chunk_count"] == 1
+    assert len(data["document_id"]) == 16
+
+    mock_ingest.assert_called_once()
+    
+def test_upload_document_rejects_unsupported_type():
+    response = client.post(
+        "/documents/upload",
+        files={
+            "file": (
+                "malicious.exe",
+                b"not a supported document",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Unsupported document type. Allowed types: .pdf, .docx, .txt"
+    }
+
 def mock_llm_response(*args, **kwargs):
     return "Employees receive 20 days of paid annual leave each calendar year [Source 1]."
 
