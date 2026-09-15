@@ -1,5 +1,10 @@
-from fastapi import APIRouter, HTTPException, Query
+from hashlib import sha256
+from pathlib import Path
+
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
+
+from src.ingestion.pipeline import IngestionPipeline
 
 from src.generation.generator import RAGGenerator
 from src.generation.llm import LLMClient
@@ -44,6 +49,99 @@ retriever = Retriever(
     vector_store=vector_store,
     reranker=reranker,
 )
+ingestion_pipeline = IngestionPipeline(
+    embedder=embedder,
+    vector_store=vector_store,
+)
+
+UPLOAD_DIR = Path("data/uploads")
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
+
+@router.post("/documents/upload", response_model=DocumentInfo)
+async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
+    filename = Path(file.filename or "").name
+
+    if not filename:
+        raise HTTPException(
+            status_code=400,
+            detail="A filename is required.",
+        )
+
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported document type. Allowed types: .pdf, .docx, .txt",
+        )
+
+    content = await file.read()
+
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is empty.",
+        )
+
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail="Uploaded file exceeds the 10 MB limit.",
+        )
+
+    document_id = sha256(content).hexdigest()[:16]
+
+    try:
+        existing = vector_store.get_by_document_id(document_id)
+        existing_metadatas = existing.get("metadatas", [])
+
+        if existing_metadatas:
+            return DocumentInfo(
+                document_id=document_id,
+                source=existing_metadatas[0].get("source", filename),
+                chunk_count=len(existing_metadatas),
+            )
+
+        document_directory = UPLOAD_DIR / document_id
+        document_directory.mkdir(parents=True, exist_ok=True)
+
+        file_path = document_directory / filename
+        file_path.write_bytes(content)
+
+        chunk_count = ingestion_pipeline.ingest(str(file_path))
+
+        if chunk_count == 0:
+            results = vector_store.get_by_document_id(document_id)
+            metadatas = results.get("metadatas", [])
+
+            if not metadatas:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Document could not be indexed.",
+                )
+
+            chunk_count = len(metadatas)
+
+        return DocumentInfo(
+            document_id=document_id,
+            source=filename,
+            chunk_count=chunk_count,
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to upload and index document.",
+        ) from exc
 
 
 @router.get("/documents", response_model=list[DocumentInfo])
