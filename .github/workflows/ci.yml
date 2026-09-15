@@ -37,5 +37,10 @@ jobs:
           dvc pull
           dvc checkout
 
+      - name: Verify DVC data
+        run: |
+          test -f data/sample.txt
+          ls -lh data/sample.txt
+
       - name: Run tests
         run: pytest -q
