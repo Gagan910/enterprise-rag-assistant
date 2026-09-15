@@ -1,11 +1,13 @@
+import os
 from typing import Any
-from src.config.settings import settings
 
 import chromadb
 
+from src.config.settings import settings
+
 
 class VectorStore:
-    """Persistent vector store backed by ChromaDB."""
+    """Vector store backed by ChromaDB."""
 
     def __init__(
         self,
@@ -14,7 +16,13 @@ class VectorStore:
     ):
         persist_directory = persist_directory or settings.vector_store_path
         collection_name = collection_name or settings.vector_collection_name
-        self.client = chromadb.PersistentClient(path=persist_directory)
+
+        if os.getenv("CHROMA_API_KEY"):
+            self.client = chromadb.CloudClient()
+        else:
+            self.client = chromadb.PersistentClient(
+                path=persist_directory
+            )
 
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
@@ -57,6 +65,7 @@ class VectorStore:
             metadatas=metadatas,
             ids=ids,
         )
+
     def delete(self, ids: list[str]) -> None:
         """Delete chunks by their IDs."""
         if not ids:
