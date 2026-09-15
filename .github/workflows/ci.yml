@@ -33,7 +33,9 @@ jobs:
         run: pip install dvc
 
       - name: Pull DVC data
-        run: dvc pull
+        run: |
+          dvc pull
+          dvc checkout
 
       - name: Run tests
         run: pytest -q
