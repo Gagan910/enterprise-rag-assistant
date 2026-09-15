@@ -1,6 +1,11 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from collections.abc import Sequence
 from typing import Any
 
+from src.evaluation.mlflow_tracking import log_retrieval_evaluation
 
 def evaluate_retrieval(
     retriever: Any,
@@ -58,3 +63,22 @@ def evaluate_retrieval(
         ),
         "results": results,
     }
+    
+def evaluate_and_log_retrieval(
+    retriever: Any,
+    dataset: Sequence[dict[str, str]],
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """Evaluate retrieval and log the results to MLflow."""
+    metrics = evaluate_retrieval(
+        retriever=retriever,
+        dataset=dataset,
+        top_k=top_k,
+    )
+
+    log_retrieval_evaluation(
+        metrics=metrics,
+        top_k=top_k,
+    )
+
+    return metrics
