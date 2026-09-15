@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 
 from dotenv import load_dotenv
 
@@ -56,9 +57,10 @@ def log_retrieval_evaluation(
         )
 
         if "results" in metrics:
-            with open(
-                "retrieval_evaluation.json",
-                "w",
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".json",
+                delete=False,
                 encoding="utf-8",
             ) as file:
                 json.dump(
@@ -66,5 +68,12 @@ def log_retrieval_evaluation(
                     file,
                     indent=2,
                 )
+                artifact_path = file.name
 
-            mlflow.log_artifact("retrieval_evaluation.json")
+            try:
+                mlflow.log_artifact(
+                    artifact_path,
+                    artifact_path="evaluation",
+                )
+            finally:
+                os.remove(artifact_path)
