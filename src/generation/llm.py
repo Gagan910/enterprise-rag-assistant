@@ -2,7 +2,7 @@ import logging
 
 import httpx
 from google import genai
-from google.genai.errors import ServerError
+from google.genai.errors import ClientError, ServerError
 from groq import Groq
 from tenacity import (
     retry,
@@ -131,6 +131,20 @@ class LLMClient:
                 if self.fallback_provider != "groq":
                     raise LLMUnavailableError(
                         "Primary LLM provider is unavailable."
+                    ) from exc
+
+            except ClientError as exc:
+                if getattr(exc, "code", None) != 429:
+                    raise
+
+                logger.warning(
+                    "Primary LLM quota exhausted provider=gemini error=%s",
+                    type(exc).__name__,
+                )
+
+                if self.fallback_provider != "groq":
+                    raise LLMUnavailableError(
+                        "Primary LLM provider quota is exhausted."
                     ) from exc
 
         if self.fallback_provider == "groq":

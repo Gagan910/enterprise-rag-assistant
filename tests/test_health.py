@@ -9,6 +9,8 @@ from fastapi import HTTPException
 
 from fastapi.testclient import TestClient
 
+from google.genai.errors import ClientError, ServerError
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.ingestion.parser import parse_document
@@ -1405,6 +1407,29 @@ def test_llm_client_falls_back_to_groq_on_server_error():
 
     assert result == "Groq fallback response"
     assert client.provider_used == "groq"
+    mock_gemini.assert_called_once_with("test prompt")
+    mock_groq.assert_called_once_with("test prompt")
+    
+
+def test_llm_client_falls_back_to_groq_on_gemini_quota_error():
+    client = LLMClient()
+
+    quota_error = ClientError(429, {})
+
+    with patch.object(
+        client,
+        "_generate_with_gemini",
+        side_effect=quota_error,
+    ) as mock_gemini, patch.object(
+        client,
+        "_generate_with_groq",
+        return_value="Groq quota fallback response",
+    ) as mock_groq:
+        result = client.generate("test prompt")
+
+    assert result == "Groq quota fallback response"
+    assert client.provider_used == "groq"
+    assert client.provider_attempts == ["gemini", "groq"]
     mock_gemini.assert_called_once_with("test prompt")
     mock_groq.assert_called_once_with("test prompt")
 
