@@ -51,6 +51,7 @@ class LLMClient:
             )
 
         self.provider_used = None
+        self.provider_attempts = []
 
     @retry(
         retry=retry_if_exception_type(
@@ -101,8 +102,11 @@ class LLMClient:
             raise ValueError("prompt cannot be empty")
 
         self.provider_used = None
+        self.provider_attempts = []
 
         if self.primary_provider == "gemini":
+            self.provider_attempts.append("gemini")
+            
             try:
                 logger.info(
                     "Generating response with Gemini model=%s",
@@ -130,6 +134,7 @@ class LLMClient:
                     ) from exc
 
         if self.fallback_provider == "groq":
+            self.provider_attempts.append("groq")
             logger.info(
                 "   Falling back to Groq model=%s",
                 settings.groq_model,

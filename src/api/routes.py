@@ -30,6 +30,7 @@ class QueryResponse(BaseModel):
     sources: list[Source]
     provider: str | None = None
     fallback_used: bool = False
+    provider_attempts: list[str] = []
 
 
 class DocumentInfo(BaseModel):
@@ -353,7 +354,7 @@ async def query(request: QueryRequest) -> QueryResponse:
             for context in contexts
         ]
 
-        def generate_answer() -> tuple[str, str | None]:
+        def generate_answer() -> tuple[str, str | None, list[str]]:
             llm_client = LLMClient()
             generator = RAGGenerator(llm_client)
 
@@ -362,16 +363,22 @@ async def query(request: QueryRequest) -> QueryResponse:
                 contexts=contexts,
             )
 
-            return answer, generator.provider_used
+            return (
+                answer,
+                generator.provider_used,
+                generator.provider_attempts,
+            )
 
-
-        answer, provider = await asyncio.to_thread(generate_answer)
+        answer, provider, provider_attempts = await asyncio.to_thread(
+            generate_answer
+        )
 
         return QueryResponse(
             answer=answer,
             sources=sources,
             provider=provider,
             fallback_used=provider == settings.llm_fallback_provider,
+            provider_attempts=provider_attempts,
         )
         
     except LLMUnavailableError as exc:

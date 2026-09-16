@@ -1465,6 +1465,7 @@ def test_query_response_includes_gemini_provider(monkeypatch):
 
     class FakeGenerator:
         provider_used = "gemini"
+        provider_attempts = ["gemini"]
 
         def __init__(self, llm_client):
             pass
@@ -1507,6 +1508,8 @@ def test_query_response_includes_groq_fallback_status(monkeypatch):
 
     class FakeGenerator:
         provider_used = "groq"
+        provider_attempts = ["gemini", "groq"]
+
 
         def __init__(self, llm_client):
             pass
