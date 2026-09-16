@@ -1,3 +1,4 @@
+import asyncio
 from hashlib import sha256
 from pathlib import Path
 
@@ -326,11 +327,13 @@ async def query(request: QueryRequest) -> QueryResponse:
             else None
         )
 
-        contexts = retriever.retrieve(
-            query=request.question,
-            top_k=request.top_k,
-            rerank_top_k=request.top_k,
-            where=where,
+        contexts = await asyncio.to_thread(
+            lambda: retriever.retrieve(
+                query=request.question,
+                top_k=request.top_k,
+                rerank_top_k=request.top_k,
+                where=where,
+            )
         )
 
         if not contexts:
@@ -347,13 +350,16 @@ async def query(request: QueryRequest) -> QueryResponse:
             for context in contexts
         ]
 
-        llm_client = LLMClient()
-        generator = RAGGenerator(llm_client)
+        def generate_answer() -> str:
+            llm_client = LLMClient()
+            generator = RAGGenerator(llm_client)
 
-        answer = generator.generate(
-            question=request.question,
-            contexts=contexts,
-        )
+            return generator.generate(
+                question=request.question,
+                contexts=contexts,
+            )
+
+        answer = await asyncio.to_thread(generate_answer)
 
         return QueryResponse(
             answer=answer,
