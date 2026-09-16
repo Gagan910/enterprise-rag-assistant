@@ -4,8 +4,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     gemini_api_key: str
+    groq_api_key: str | None = None
+
+    llm_provider: str = "gemini"
+    llm_fallback_provider: str = "groq"
 
     llm_model: str = "gemini-3.7-flash"
+    groq_model: str = "llama-3.3-70b-versatile"
 
     embedding_model: str = "all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"

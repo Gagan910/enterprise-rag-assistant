@@ -5,6 +5,7 @@ from google.genai.errors import ServerError
 from pathlib import Path
 from unittest.mock import patch
 from docx import Document
+from fastapi import HTTPException
 
 from fastapi.testclient import TestClient
 
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.ingestion.parser import parse_document
 from src.ingestion.chunker import chunk_text
 from src.generation.prompt import build_rag_prompt
-from src.generation.llm import LLMClient
+from src.generation.llm import LLMClient, LLMUnavailableError
 from src.main import app
 from src.ingestion.cleaner import clean_text
 from src.retrieval.embedder import TextEmbedder
@@ -1366,3 +1367,252 @@ def test_evaluate_retrieval_handles_empty_dataset():
     assert result["hit_rate"] == 0.0
     assert result["mrr"] == 0.0
     assert result["results"] == []
+    
+def test_llm_client_uses_gemini_when_available():
+    client = LLMClient()
+
+    with patch.object(
+        client,
+        "_generate_with_gemini",
+        return_value="Gemini response",
+    ) as mock_gemini, patch.object(
+        client,
+        "_generate_with_groq",
+    ) as mock_groq:
+        result = client.generate("test prompt")
+
+    assert result == "Gemini response"
+    assert client.provider_used == "gemini"
+    mock_gemini.assert_called_once_with("test prompt")
+    mock_groq.assert_not_called()
+
+
+def test_llm_client_falls_back_to_groq_on_server_error():
+    client = LLMClient()
+
+    server_error = ServerError(503, {})
+
+    with patch.object(
+        client,
+        "_generate_with_gemini",
+        side_effect=server_error,
+    ) as mock_gemini, patch.object(
+        client,
+        "_generate_with_groq",
+        return_value="Groq fallback response",
+    ) as mock_groq:
+        result = client.generate("test prompt")
+
+    assert result == "Groq fallback response"
+    assert client.provider_used == "groq"
+    mock_gemini.assert_called_once_with("test prompt")
+    mock_groq.assert_called_once_with("test prompt")
+
+
+def test_llm_client_falls_back_to_groq_on_timeout():
+    client = LLMClient()
+
+    timeout_error = httpx.ReadTimeout("request timed out")
+
+    with patch.object(
+        client,
+        "_generate_with_gemini",
+        side_effect=timeout_error,
+    ) as mock_gemini, patch.object(
+        client,
+        "_generate_with_groq",
+        return_value="Groq timeout fallback",
+    ) as mock_groq:
+        result = client.generate("test prompt")
+
+    assert result == "Groq timeout fallback"
+    assert client.provider_used == "groq"
+    mock_gemini.assert_called_once_with("test prompt")
+    mock_groq.assert_called_once_with("test prompt")
+
+
+def test_llm_client_does_not_fallback_on_permanent_error():
+    client = LLMClient()
+
+    with patch.object(
+        client,
+        "_generate_with_gemini",
+        side_effect=ValueError("invalid request"),
+    ) as mock_gemini, patch.object(
+        client,
+        "_generate_with_groq",
+    ) as mock_groq:
+        with pytest.raises(ValueError, match="invalid request"):
+            client.generate("test prompt")
+
+    assert client.provider_used is None
+    mock_gemini.assert_called_once_with("test prompt")
+    mock_groq.assert_not_called()
+    
+def test_query_response_includes_gemini_provider(monkeypatch):
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            return [
+                {
+                    "id": "chunk-1",
+                    "text": "Employees receive 20 days of paid annual leave.",
+                    "metadata": {
+                        "source": "sample.txt",
+                        "chunk_id": 1,
+                    },
+                }
+            ]
+
+    class FakeGenerator:
+        provider_used = "gemini"
+
+        def __init__(self, llm_client):
+            pass
+
+        def generate(self, question, contexts):
+            return "Employees receive 20 days of paid annual leave."
+
+    monkeypatch.setattr(
+        "src.api.routes.retriever",
+        FakeRetriever(),
+    )
+    monkeypatch.setattr(
+        "src.api.routes.RAGGenerator",
+        FakeGenerator,
+    )
+
+    from src.api.routes import QueryRequest, query
+
+    response = __import__("asyncio").run(
+        query(QueryRequest(question="How many annual leave days?"))
+    )
+
+    assert response.provider == "gemini"
+    assert response.fallback_used is False
+
+
+def test_query_response_includes_groq_fallback_status(monkeypatch):
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            return [
+                {
+                    "id": "chunk-1",
+                    "text": "Employees receive 20 days of paid annual leave.",
+                    "metadata": {
+                        "source": "sample.txt",
+                        "chunk_id": 1,
+                    },
+                }
+            ]
+
+    class FakeGenerator:
+        provider_used = "groq"
+
+        def __init__(self, llm_client):
+            pass
+
+        def generate(self, question, contexts):
+            return "Employees receive 20 days of paid annual leave."
+
+    monkeypatch.setattr(
+        "src.api.routes.retriever",
+        FakeRetriever(),
+    )
+    monkeypatch.setattr(
+        "src.api.routes.RAGGenerator",
+        FakeGenerator,
+    )
+
+    from src.api.routes import QueryRequest, query
+
+    response = __import__("asyncio").run(
+        query(QueryRequest(question="How many annual leave days?"))
+    )
+
+    assert response.provider == "groq"
+    assert response.fallback_used is True
+    
+def test_query_returns_503_when_all_llm_providers_fail(monkeypatch):
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            return [
+                {
+                    "id": "chunk-1",
+                    "text": "Test context",
+                    "metadata": {
+                        "source": "sample.txt",
+                        "chunk_id": 1,
+                    },
+                }
+            ]
+
+    class FakeGenerator:
+        def __init__(self, llm_client):
+            pass
+
+        def generate(self, question, contexts):
+            raise LLMUnavailableError(
+                "All configured LLM providers are unavailable."
+            )
+
+    monkeypatch.setattr(
+        "src.api.routes.retriever",
+        FakeRetriever(),
+    )
+    monkeypatch.setattr(
+        "src.api.routes.RAGGenerator",
+        FakeGenerator,
+    )
+
+    from src.api.routes import QueryRequest, query
+
+    with pytest.raises(HTTPException) as exc_info:
+        __import__("asyncio").run(
+            query(QueryRequest(question="Test question"))
+        )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        exc_info.value.detail
+        == "The language model is temporarily unavailable. Please try again later."
+    )
+
+
+def test_query_returns_503_for_llm_unavailable_error(monkeypatch):
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            return [
+                {
+                    "id": "chunk-1",
+                    "text": "Test context",
+                    "metadata": {
+                        "source": "sample.txt",
+                        "chunk_id": 1,
+                    },
+                }
+            ]
+
+    class FakeGenerator:
+        def __init__(self, llm_client):
+            pass
+
+        def generate(self, question, contexts):
+            raise LLMUnavailableError("Provider unavailable")
+
+    monkeypatch.setattr(
+        "src.api.routes.retriever",
+        FakeRetriever(),
+    )
+    monkeypatch.setattr(
+        "src.api.routes.RAGGenerator",
+        FakeGenerator,
+    )
+
+    from src.api.routes import QueryRequest, query
+
+    with pytest.raises(HTTPException) as exc_info:
+        __import__("asyncio").run(
+            query(QueryRequest(question="Another test question"))
+        )
+
+    assert exc_info.value.status_code == 503

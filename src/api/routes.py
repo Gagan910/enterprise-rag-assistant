@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 from src.generation.generator import RAGGenerator
-from src.generation.llm import LLMClient
+from src.generation.llm import LLMClient, LLMUnavailableError
 from src.config.settings import settings
 
 
@@ -28,6 +28,8 @@ class Source(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: list[Source]
+    provider: str | None = None
+    fallback_used: bool = False
 
 
 class DocumentInfo(BaseModel):
@@ -351,23 +353,28 @@ async def query(request: QueryRequest) -> QueryResponse:
             for context in contexts
         ]
 
-        def generate_answer() -> str:
+        def generate_answer() -> tuple[str, str | None]:
             llm_client = LLMClient()
             generator = RAGGenerator(llm_client)
 
-            return generator.generate(
+            answer = generator.generate(
                 question=request.question,
                 contexts=contexts,
             )
 
-        answer = await asyncio.to_thread(generate_answer)
+            return answer, generator.provider_used
+
+
+        answer, provider = await asyncio.to_thread(generate_answer)
 
         return QueryResponse(
             answer=answer,
             sources=sources,
+            provider=provider,
+            fallback_used=provider == settings.llm_fallback_provider,
         )
-
-    except ServerError as exc:
+        
+    except LLMUnavailableError as exc:
         print(f"QUERY ERROR: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(
             status_code=503,
