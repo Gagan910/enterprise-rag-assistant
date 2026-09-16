@@ -1,4 +1,7 @@
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from src.retrieval.embedder import TextEmbedder
 from src.retrieval.reranker import Reranker
