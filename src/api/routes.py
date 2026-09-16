@@ -3,6 +3,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from google.genai.errors import ServerError
 from pydantic import BaseModel, Field
 
 
@@ -366,6 +367,12 @@ async def query(request: QueryRequest) -> QueryResponse:
             sources=sources,
         )
 
+    except ServerError as exc:
+        print(f"QUERY ERROR: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(
+            status_code=503,
+            detail="The language model is temporarily unavailable. Please try again later.",
+        ) from exc
     except Exception as exc:
         print(f"QUERY ERROR: {type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(
