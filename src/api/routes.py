@@ -4,14 +4,9 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from src.ingestion.pipeline import IngestionPipeline
 
 from src.generation.generator import RAGGenerator
 from src.generation.llm import LLMClient
-from src.retrieval.embedder import TextEmbedder
-from src.retrieval.reranker import Reranker
-from src.retrieval.retriever import Retriever
-from src.retrieval.vector_store import VectorStore
 from src.config.settings import settings
 
 
@@ -39,19 +34,86 @@ class DocumentInfo(BaseModel):
     chunk_count: int
 
 
-embedder = TextEmbedder()
-vector_store = VectorStore(
-    collection_name=settings.vector_collection_name
-)
-reranker = Reranker()
-retriever = Retriever(
-    embedder=embedder,
-    vector_store=vector_store,
-    reranker=reranker,
-)
-ingestion_pipeline = IngestionPipeline(
-    embedder=embedder,
-    vector_store=vector_store,
+class _LazyComponent:
+    def __init__(self, factory):
+        self._factory = factory
+        self._instance = None
+
+    def _get_instance(self):
+        if self._instance is None:
+            self._instance = self._factory()
+        return self._instance
+
+    def __getattr__(self, name):
+        return getattr(self._get_instance(), name)
+
+
+def _create_components():
+    from src.ingestion.pipeline import IngestionPipeline
+    from src.retrieval.embedder import TextEmbedder
+    from src.retrieval.reranker import Reranker
+    from src.retrieval.retriever import Retriever
+    from src.retrieval.vector_store import VectorStore
+
+    embedder = TextEmbedder()
+
+    vector_store = VectorStore(
+        collection_name=settings.vector_collection_name
+    )
+
+    reranker = Reranker()
+
+    retriever = Retriever(
+        embedder=embedder,
+        vector_store=vector_store,
+        reranker=reranker,
+    )
+
+    ingestion_pipeline = IngestionPipeline(
+        embedder=embedder,
+        vector_store=vector_store,
+    )
+
+    return (
+        embedder,
+        vector_store,
+        reranker,
+        retriever,
+        ingestion_pipeline,
+    )
+
+
+class _Components:
+    def __init__(self):
+        self._initialized = False
+
+        self.embedder = None
+        self.vector_store = None
+        self.reranker = None
+        self.retriever = None
+        self.ingestion_pipeline = None
+
+    def _initialize(self):
+        if not self._initialized:
+            (
+                self.embedder,
+                self.vector_store,
+                self.reranker,
+                self.retriever,
+                self.ingestion_pipeline,
+            ) = _create_components()
+
+            self._initialized = True
+
+
+components = _Components()
+
+embedder = _LazyComponent(lambda: components._initialize() or components.embedder)
+vector_store = _LazyComponent(lambda: components._initialize() or components.vector_store)
+reranker = _LazyComponent(lambda: components._initialize() or components.reranker)
+retriever = _LazyComponent(lambda: components._initialize() or components.retriever)
+ingestion_pipeline = _LazyComponent(
+    lambda: components._initialize() or components.ingestion_pipeline
 )
 
 UPLOAD_DIR = Path("data/uploads")
