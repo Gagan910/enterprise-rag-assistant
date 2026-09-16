@@ -25,3 +25,5 @@ python-multipart==0.0.20
 reportlab==4.3.1
 
 mlflow==2.19.0
+
+tenacity==9.0.0

@@ -1,5 +1,7 @@
 import pytest
 import sys
+import httpx
+from google.genai.errors import ServerError
 from pathlib import Path
 from unittest.mock import patch
 from docx import Document
@@ -183,6 +185,62 @@ def test_llm_client_generate():
         model=client.model_name,
         contents="Test prompt",
     )
+    
+def test_llm_client_retries_on_server_error():
+    client = LLMClient()
+
+    mock_response = type(
+        "Response",
+        (),
+        {"text": "successful response"},
+    )()
+
+    server_error = ServerError(503, {})
+
+    with patch.object(
+        client.client.models,
+        "generate_content",
+        side_effect=[server_error, mock_response],
+    ) as mock_generate:
+        result = client.generate("test prompt")
+
+    assert result == "successful response"
+    assert mock_generate.call_count == 2
+
+
+def test_llm_client_retries_on_read_timeout():
+    client = LLMClient()
+
+    mock_response = type(
+        "Response",
+        (),
+        {"text": "successful response"},
+    )()
+
+    timeout_error = httpx.ReadTimeout("request timed out")
+
+    with patch.object(
+        client.client.models,
+        "generate_content",
+        side_effect=[timeout_error, mock_response],
+    ) as mock_generate:
+        result = client.generate("test prompt")
+
+    assert result == "successful response"
+    assert mock_generate.call_count == 2
+
+def test_llm_client_does_not_retry_permanent_error():
+    client = LLMClient()
+
+    with patch.object(
+        client.client.models,
+        "generate_content",
+        side_effect=ValueError("invalid request"),
+    ) as mock_generate:
+        with pytest.raises(ValueError, match="invalid request"):
+            client.generate("test prompt")
+
+    assert mock_generate.call_count == 1
 
 def test_llm_client_rejects_empty_prompt():
     client = LLMClient()
