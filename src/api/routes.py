@@ -127,13 +127,29 @@ class _Components:
         if not self._initialized:
             initialization_start = time.perf_counter()
 
+            components_start = time.perf_counter()
+
+            component_values = _create_components()
+
+            print(
+                f"COMPONENT FACTORY TOTAL={time.perf_counter() - components_start:.2f}s",
+                flush=True,
+            )
+
+            assignment_start = time.perf_counter()
+
             (
                 self.embedder,
                 self.vector_store,
                 self.reranker,
                 self.retriever,
                 self.ingestion_pipeline,
-            ) = _create_components()
+            ) = component_values
+
+            print(
+                f"COMPONENT ASSIGNMENT={time.perf_counter() - assignment_start:.2f}s",
+                flush=True,
+            )
 
             initialization_time = (
                 time.perf_counter() - initialization_start
