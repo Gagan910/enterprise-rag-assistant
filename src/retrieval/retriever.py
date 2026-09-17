@@ -1,12 +1,14 @@
 import logging
+import time
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
+from src.config.settings import settings
 from src.retrieval.embedder import TextEmbedder
 from src.retrieval.reranker import Reranker
 from src.retrieval.vector_store import VectorStore
-from src.config.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class Retriever:
@@ -30,6 +32,7 @@ class Retriever:
         where: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieve relevant chunks and optionally rerank them."""
+
         if not isinstance(query, str):
             raise TypeError("query must be a string")
 
@@ -45,12 +48,32 @@ class Retriever:
         if top_k <= 0:
             raise ValueError("top_k must be greater than zero")
 
+        # 1. Query embedding
+        embedding_start = time.perf_counter()
+
         query_embedding = self.embedder.embed_text(query)
+
+        embedding_time = time.perf_counter() - embedding_start
+
+        print(
+            f"RETRIEVAL TIMING embedding={embedding_time:.2f}s",
+            flush=True,
+        )
+
+        # 2. Vector search
+        search_start = time.perf_counter()
 
         results = self.vector_store.search(
             query_embedding=query_embedding,
             top_k=top_k,
             where=where,
+        )
+
+        search_time = time.perf_counter() - search_start
+
+        print(
+            f"RETRIEVAL TIMING vector_search={search_time:.2f}s",
+            flush=True,
         )
 
         documents = results.get("documents", [[]])[0]
@@ -83,16 +106,28 @@ class Retriever:
                 }
             )
 
+        # 3. Reranking
         if self.reranker and retrieved_chunks:
             rerank_k = (
                 rerank_top_k or settings.rerank_top_k
             )
 
-            return self.reranker.rerank(
+            rerank_start = time.perf_counter()
+
+            reranked = self.reranker.rerank(
                 query=query,
                 documents=retrieved_chunks,
                 top_k=rerank_k,
             )
+
+            rerank_time = time.perf_counter() - rerank_start
+
+            print(
+                f"RETRIEVAL TIMING rerank={rerank_time:.2f}s",
+                flush=True,
+            )
+
+            return reranked
 
         return retrieved_chunks
     
