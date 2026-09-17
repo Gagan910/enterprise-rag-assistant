@@ -54,11 +54,40 @@ class _LazyComponent:
 
 
 def _create_components():
+    import_start = time.perf_counter()
     from src.ingestion.pipeline import IngestionPipeline
+    print(
+        f"IMPORT TIMING ingestion_pipeline={time.perf_counter() - import_start:.2f}s",
+        flush=True,
+    )
+
+    import_start = time.perf_counter()
     from src.retrieval.embedder import TextEmbedder
+    print(
+        f"IMPORT TIMING embedder={time.perf_counter() - import_start:.2f}s",
+        flush=True,
+    )
+
+    import_start = time.perf_counter()
     from src.retrieval.reranker import Reranker
+    print(
+        f"IMPORT TIMING reranker={time.perf_counter() - import_start:.2f}s",
+        flush=True,
+    )
+
+    import_start = time.perf_counter()
     from src.retrieval.retriever import Retriever
+    print(
+        f"IMPORT TIMING retriever={time.perf_counter() - import_start:.2f}s",
+        flush=True,
+    )
+
+    import_start = time.perf_counter()
     from src.retrieval.vector_store import VectorStore
+    print(
+        f"IMPORT TIMING vector_store={time.perf_counter() - import_start:.2f}s",
+        flush=True,
+    )
 
     start = time.perf_counter()
     embedder = TextEmbedder()
