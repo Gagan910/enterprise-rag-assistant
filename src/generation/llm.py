@@ -23,11 +23,29 @@ class LLMUnavailableError(RuntimeError):
 
 
 def _log_retry(retry_state):
+    exc = retry_state.outcome.exception()
+
     logger.warning(
-        "LLM RETRY attempt=%s/4 exception=%s",
+        "LLM RETRY attempt=%s/4 exception=%s details=%s",
         retry_state.attempt_number,
-        type(retry_state.outcome.exception()).__name__,
+        type(exc).__name__,
+        str(exc)[:200],
     )
+
+
+def _is_retryable_gemini_error(exc: BaseException) -> bool:
+    """Return True only for transient Gemini failures."""
+
+    if isinstance(exc, (httpx.ReadTimeout, ConnectionError)):
+        return True
+
+    if isinstance(exc, ServerError):
+        return True
+
+    if isinstance(exc, ClientError):
+        return getattr(exc, "code", None) not in {400, 401, 403, 404, 429}
+
+    return False
 
 
 class LLMClient:
@@ -57,24 +75,9 @@ class LLMClient:
         self._gemini_cooldown_seconds = 300
 
     @retry(
-        retry=retry_if_exception(
-            lambda exc: (
-                isinstance(
-                    exc,
-                    (
-                        httpx.ReadTimeout,
-                        ConnectionError,
-                        ServerError,
-                    ),
-                )
-                or (
-                    isinstance(exc, ClientError)
-                    and getattr(exc, "code", None) != 429
-                )
-            )
-        ),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
-        stop=stop_after_attempt(4),
+        retry=retry_if_exception(_is_retryable_gemini_error),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        stop=stop_after_attempt(2),
         before_sleep=_log_retry,
         reraise=True,
     )
