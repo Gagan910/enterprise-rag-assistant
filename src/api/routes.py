@@ -60,23 +60,48 @@ def _create_components():
     from src.retrieval.retriever import Retriever
     from src.retrieval.vector_store import VectorStore
 
+    start = time.perf_counter()
     embedder = TextEmbedder()
+    print(
+        f"COMPONENT TIMING embedder={time.perf_counter() - start:.2f}s",
+        flush=True,
+    )
 
+    start = time.perf_counter()
     vector_store = VectorStore(
         collection_name=settings.vector_collection_name
     )
+    print(
+        f"COMPONENT TIMING vector_store={time.perf_counter() - start:.2f}s",
+        flush=True,
+    )
 
+    start = time.perf_counter()
     reranker = Reranker()
+    print(
+        f"COMPONENT TIMING reranker={time.perf_counter() - start:.2f}s",
+        flush=True,
+    )
 
+    start = time.perf_counter()
     retriever = Retriever(
         embedder=embedder,
         vector_store=vector_store,
         reranker=reranker,
     )
+    print(
+        f"COMPONENT TIMING retriever={time.perf_counter() - start:.2f}s",
+        flush=True,
+    )
 
+    start = time.perf_counter()
     ingestion_pipeline = IngestionPipeline(
         embedder=embedder,
         vector_store=vector_store,
+    )
+    print(
+        f"COMPONENT TIMING ingestion={time.perf_counter() - start:.2f}s",
+        flush=True,
     )
 
     return (
