@@ -1,11 +1,13 @@
 import logging
 
+import time
 import httpx
 from google import genai
 from google.genai.errors import ClientError, ServerError
 from groq import Groq
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -52,13 +54,24 @@ class LLMClient:
 
         self.provider_used = None
         self.provider_attempts = []
+        self._gemini_cooldown_until = 0.0
+        self._gemini_cooldown_seconds = 300
 
     @retry(
-        retry=retry_if_exception_type(
-            (
-                httpx.ReadTimeout,
-                ConnectionError,
-                ServerError,
+        retry=retry_if_exception(
+            lambda exc: (
+                isinstance(
+                    exc,
+                    (
+                        httpx.ReadTimeout,
+                        ConnectionError,
+                        ServerError,
+                    ),
+                )
+                or (
+                    isinstance(exc, ClientError)
+                    and getattr(exc, "code", None) != 429
+                )
             )
         ),
         wait=wait_exponential(multiplier=1, min=1, max=8),
@@ -103,6 +116,28 @@ class LLMClient:
 
         self.provider_used = None
         self.provider_attempts = []
+        
+        gemini_in_cooldown = time.monotonic() < self._gemini_cooldown_until
+
+        if (
+            self.primary_provider == "gemini"
+            and gemini_in_cooldown
+            and self.fallback_provider == "groq"
+        ):
+            self.provider_attempts.append("groq")
+
+            try:
+                answer = self._generate_with_groq(prompt)
+                self.provider_used = "groq"
+                return answer
+            except Exception as exc:
+                logger.error(
+                    "Fallback LLM unavailable provider=groq error=%s",
+                    type(exc).__name__,
+                )
+                raise LLMUnavailableError(
+                    "All configured LLM providers are unavailable."
+                ) from exc
 
         if self.primary_provider == "gemini":
             self.provider_attempts.append("gemini")
@@ -136,6 +171,10 @@ class LLMClient:
             except ClientError as exc:
                 if getattr(exc, "code", None) != 429:
                     raise
+                
+                self._gemini_cooldown_until = (
+                    time.monotonic() + self._gemini_cooldown_seconds
+                )
 
                 logger.warning(
                     "Primary LLM quota exhausted provider=gemini error=%s",
