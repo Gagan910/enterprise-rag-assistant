@@ -1,15 +1,14 @@
 import asyncio
+import time
 from hashlib import sha256
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
-from google.genai.errors import ServerError
 from pydantic import BaseModel, Field
 
-
+from src.config.settings import settings
 from src.generation.generator import RAGGenerator
 from src.generation.llm import LLMClient, LLMUnavailableError
-from src.config.settings import settings
 
 
 router = APIRouter()
@@ -24,6 +23,7 @@ class QueryRequest(BaseModel):
 class Source(BaseModel):
     source: str
     chunk_id: int | str
+
 
 class QueryResponse(BaseModel):
     answer: str
@@ -113,13 +113,30 @@ class _Components:
 
 components = _Components()
 
-embedder = _LazyComponent(lambda: components._initialize() or components.embedder)
-vector_store = _LazyComponent(lambda: components._initialize() or components.vector_store)
-reranker = _LazyComponent(lambda: components._initialize() or components.reranker)
-retriever = _LazyComponent(lambda: components._initialize() or components.retriever)
+embedder = _LazyComponent(
+    lambda: components._initialize() or components.embedder
+)
+
+vector_store = _LazyComponent(
+    lambda: components._initialize() or components.vector_store
+)
+
+reranker = _LazyComponent(
+    lambda: components._initialize() or components.reranker
+)
+
+retriever = _LazyComponent(
+    lambda: components._initialize() or components.retriever
+)
+
 ingestion_pipeline = _LazyComponent(
     lambda: components._initialize() or components.ingestion_pipeline
 )
+
+# Shared lazy LLM client.
+# This preserves provider state and Gemini cooldown across requests.
+llm_client = _LazyComponent(lambda: LLMClient())
+
 
 UPLOAD_DIR = Path("data/uploads")
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
@@ -331,6 +348,8 @@ async def query(request: QueryRequest) -> QueryResponse:
             else None
         )
 
+        retrieval_start = time.perf_counter()
+
         contexts = await asyncio.to_thread(
             lambda: retriever.retrieve(
                 query=request.question,
@@ -338,6 +357,13 @@ async def query(request: QueryRequest) -> QueryResponse:
                 rerank_top_k=request.top_k,
                 where=where,
             )
+        )
+
+        retrieval_time = time.perf_counter() - retrieval_start
+
+        print(
+            f"QUERY TIMING retrieval={retrieval_time:.2f}s",
+            flush=True,
         )
 
         if not contexts:
@@ -349,13 +375,15 @@ async def query(request: QueryRequest) -> QueryResponse:
         sources = [
             Source(
                 source=context["metadata"].get("source", "Unknown"),
-                chunk_id=context["metadata"].get("chunk_id", context["id"]),
+                chunk_id=context["metadata"].get(
+                    "chunk_id",
+                    context["id"],
+                ),
             )
             for context in contexts
         ]
 
         def generate_answer() -> tuple[str, str | None, list[str]]:
-            llm_client = LLMClient()
             generator = RAGGenerator(llm_client)
 
             answer = generator.generate(
@@ -369,8 +397,17 @@ async def query(request: QueryRequest) -> QueryResponse:
                 generator.provider_attempts,
             )
 
+        llm_start = time.perf_counter()
+
         answer, provider, provider_attempts = await asyncio.to_thread(
             generate_answer
+        )
+
+        llm_time = time.perf_counter() - llm_start
+
+        print(
+            f"QUERY TIMING llm={llm_time:.2f}s provider={provider}",
+            flush=True,
         )
 
         return QueryResponse(
@@ -380,16 +417,24 @@ async def query(request: QueryRequest) -> QueryResponse:
             fallback_used=provider == settings.llm_fallback_provider,
             provider_attempts=provider_attempts,
         )
-        
+
     except LLMUnavailableError as exc:
-        print(f"QUERY ERROR: {type(exc).__name__}: {exc}", flush=True)
+        print(
+            f"QUERY ERROR: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
         raise HTTPException(
             status_code=503,
             detail="The language model is temporarily unavailable. Please try again later.",
         ) from exc
+
     except Exception as exc:
-        print(f"QUERY ERROR: {type(exc).__name__}: {exc}", flush=True)
+        print(
+            f"QUERY ERROR: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
         raise HTTPException(
             status_code=500,
             detail="Failed to process the query.",
         ) from exc
+        
