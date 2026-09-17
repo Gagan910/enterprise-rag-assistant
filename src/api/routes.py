@@ -100,6 +100,8 @@ class _Components:
 
     def _initialize(self):
         if not self._initialized:
+            initialization_start = time.perf_counter()
+
             (
                 self.embedder,
                 self.vector_store,
@@ -107,6 +109,15 @@ class _Components:
                 self.retriever,
                 self.ingestion_pipeline,
             ) = _create_components()
+
+            initialization_time = (
+                time.perf_counter() - initialization_start
+            )
+
+            print(
+                f"COMPONENT INITIALIZATION={initialization_time:.2f}s",
+                flush=True,
+            )
 
             self._initialized = True
 
