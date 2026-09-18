@@ -54,83 +54,29 @@ class _LazyComponent:
 
 
 def _create_components():
-    import_start = time.perf_counter()
     from src.ingestion.pipeline import IngestionPipeline
-    print(
-        f"IMPORT TIMING ingestion_pipeline={time.perf_counter() - import_start:.2f}s",
-        flush=True,
-    )
-
-    import_start = time.perf_counter()
     from src.retrieval.embedder import TextEmbedder
-    print(
-        f"IMPORT TIMING embedder={time.perf_counter() - import_start:.2f}s",
-        flush=True,
-    )
-
-    import_start = time.perf_counter()
     from src.retrieval.reranker import Reranker
-    print(
-        f"IMPORT TIMING reranker={time.perf_counter() - import_start:.2f}s",
-        flush=True,
-    )
-
-    import_start = time.perf_counter()
     from src.retrieval.retriever import Retriever
-    print(
-        f"IMPORT TIMING retriever={time.perf_counter() - import_start:.2f}s",
-        flush=True,
-    )
-
-    import_start = time.perf_counter()
     from src.retrieval.vector_store import VectorStore
-    print(
-        f"IMPORT TIMING vector_store={time.perf_counter() - import_start:.2f}s",
-        flush=True,
-    )
 
-    start = time.perf_counter()
     embedder = TextEmbedder()
-    print(
-        f"COMPONENT TIMING embedder={time.perf_counter() - start:.2f}s",
-        flush=True,
-    )
 
-    start = time.perf_counter()
     vector_store = VectorStore(
         collection_name=settings.vector_collection_name
     )
-    print(
-        f"COMPONENT TIMING vector_store={time.perf_counter() - start:.2f}s",
-        flush=True,
-    )
 
-    start = time.perf_counter()
     reranker = Reranker()
-    print(
-        f"COMPONENT TIMING reranker={time.perf_counter() - start:.2f}s",
-        flush=True,
-    )
 
-    start = time.perf_counter()
     retriever = Retriever(
         embedder=embedder,
         vector_store=vector_store,
         reranker=reranker,
     )
-    print(
-        f"COMPONENT TIMING retriever={time.perf_counter() - start:.2f}s",
-        flush=True,
-    )
 
-    start = time.perf_counter()
     ingestion_pipeline = IngestionPipeline(
         embedder=embedder,
         vector_store=vector_store,
-    )
-    print(
-        f"COMPONENT TIMING ingestion={time.perf_counter() - start:.2f}s",
-        flush=True,
     )
 
     return (
@@ -154,40 +100,13 @@ class _Components:
 
     def _initialize(self):
         if not self._initialized:
-            initialization_start = time.perf_counter()
-
-            components_start = time.perf_counter()
-
-            component_values = _create_components()
-
-            print(
-                f"COMPONENT FACTORY TOTAL={time.perf_counter() - components_start:.2f}s",
-                flush=True,
-            )
-
-            assignment_start = time.perf_counter()
-
             (
                 self.embedder,
                 self.vector_store,
                 self.reranker,
                 self.retriever,
                 self.ingestion_pipeline,
-            ) = component_values
-
-            print(
-                f"COMPONENT ASSIGNMENT={time.perf_counter() - assignment_start:.2f}s",
-                flush=True,
-            )
-
-            initialization_time = (
-                time.perf_counter() - initialization_start
-            )
-
-            print(
-                f"COMPONENT INITIALIZATION={initialization_time:.2f}s",
-                flush=True,
-            )
+            ) = _create_components()
 
             self._initialized = True
 
@@ -213,6 +132,7 @@ retriever = _LazyComponent(
 ingestion_pipeline = _LazyComponent(
     lambda: components._initialize() or components.ingestion_pipeline
 )
+
 
 # Shared lazy LLM client.
 # This preserves provider state and Gemini cooldown across requests.
@@ -297,11 +217,13 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
 
     except HTTPException:
         raise
+
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail=str(exc),
         ) from exc
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -375,6 +297,7 @@ def get_document(document_id: str) -> DocumentInfo:
 
     except HTTPException:
         raise
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -408,6 +331,7 @@ def delete_document(document_id: str) -> dict[str, str]:
 
     except HTTPException:
         raise
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -504,6 +428,7 @@ async def query(request: QueryRequest) -> QueryResponse:
             f"QUERY ERROR: {type(exc).__name__}: {exc}",
             flush=True,
         )
+
         raise HTTPException(
             status_code=503,
             detail="The language model is temporarily unavailable. Please try again later.",
@@ -514,6 +439,7 @@ async def query(request: QueryRequest) -> QueryResponse:
             f"QUERY ERROR: {type(exc).__name__}: {exc}",
             flush=True,
         )
+
         raise HTTPException(
             status_code=500,
             detail="Failed to process the query.",
