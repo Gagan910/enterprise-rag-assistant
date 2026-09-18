@@ -1,12 +1,9 @@
 import hashlib
-
 from pathlib import Path
 
 from src.ingestion.chunker import chunk_text
 from src.ingestion.cleaner import clean_text
 from src.ingestion.parser import parse_document
-from src.retrieval.embedder import TextEmbedder
-from src.retrieval.vector_store import VectorStore
 from src.config.settings import settings
 
 
@@ -15,8 +12,8 @@ class IngestionPipeline:
 
     def __init__(
         self,
-        embedder: TextEmbedder,
-        vector_store: VectorStore,
+        embedder,
+        vector_store,
     ):
         self.embedder = embedder
         self.vector_store = vector_store
@@ -87,3 +84,4 @@ class IngestionPipeline:
         )
 
         return len(chunks)
+    
