@@ -20,13 +20,32 @@ class Settings(BaseSettings):
 
     retrieval_top_k: int = Field(default=5, gt=0)
     rerank_top_k: int = Field(default=3, gt=0)
-    
+
     @model_validator(mode="after")
-    def validate_chunk_overlap(self) -> "Settings":
+    def validate_settings(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError(
                 "chunk_overlap must be smaller than chunk_size"
             )
+
+        supported_providers = {"gemini", "groq"}
+
+        if self.llm_provider not in supported_providers:
+            raise ValueError(
+                f"Unsupported llm_provider: {self.llm_provider}"
+            )
+
+        if self.llm_fallback_provider not in supported_providers:
+            raise ValueError(
+                f"Unsupported llm_fallback_provider: "
+                f"{self.llm_fallback_provider}"
+            )
+
+        if self.llm_provider == self.llm_fallback_provider:
+            raise ValueError(
+                "llm_provider and llm_fallback_provider must be different"
+            )
+
         return self
 
     vector_store_path: str = "data/chroma"
@@ -37,5 +56,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
 
 settings = Settings()
