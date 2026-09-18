@@ -26,7 +26,7 @@ def _log_retry(retry_state):
     exc = retry_state.outcome.exception()
 
     logger.warning(
-        "LLM RETRY attempt=%s/4 exception=%s details=%s",
+        "LLM RETRY attempt=%s/2 exception=%s details=%s",
         retry_state.attempt_number,
         type(exc).__name__,
         str(exc)[:200],
