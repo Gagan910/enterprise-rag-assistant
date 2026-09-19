@@ -3,7 +3,8 @@ import time
 from hashlib import sha256
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from src.config.settings import settings
@@ -12,6 +13,27 @@ from src.generation.llm import LLMClient, LLMUnavailableError
 
 
 router = APIRouter()
+
+api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=False,
+)
+
+
+def require_api_key(api_key: str | None = Depends(api_key_header)) -> None:
+    """Require a valid API key for protected endpoints."""
+
+    if not settings.api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="API authentication is not configured.",
+        )
+
+    if api_key != settings.api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key.",
+        )
 
 
 class QueryRequest(BaseModel):
@@ -144,7 +166,11 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024
 
 
-@router.post("/documents/upload", response_model=DocumentInfo)
+@router.post(
+    "/documents/upload",
+    response_model=DocumentInfo,
+    dependencies=[Depends(require_api_key)],
+)
 async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
     filename = Path(file.filename or "").name
 
@@ -231,7 +257,11 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
         ) from exc
 
 
-@router.get("/documents", response_model=list[DocumentInfo])
+@router.get(
+    "/documents",
+    response_model=list[DocumentInfo],
+    dependencies=[Depends(require_api_key)],
+)
 def list_documents(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=100),
@@ -268,7 +298,11 @@ def list_documents(
         ) from exc
 
 
-@router.get("/documents/{document_id}", response_model=DocumentInfo)
+@router.get(
+    "/documents/{document_id}",
+    response_model=DocumentInfo,
+    dependencies=[Depends(require_api_key)],
+)
 def get_document(document_id: str) -> DocumentInfo:
     try:
         if not document_id.strip():
@@ -305,7 +339,10 @@ def get_document(document_id: str) -> DocumentInfo:
         ) from exc
 
 
-@router.delete("/documents/{document_id}")
+@router.delete(
+    "/documents/{document_id}",
+    dependencies=[Depends(require_api_key)],
+)
 def delete_document(document_id: str) -> dict[str, str]:
     try:
         if not document_id.strip():
@@ -344,7 +381,11 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/query", response_model=QueryResponse)
+@router.post(
+    "/query",
+    response_model=QueryResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def query(request: QueryRequest) -> QueryResponse:
     try:
         where = (

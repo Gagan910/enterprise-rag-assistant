@@ -17,7 +17,11 @@ from src.ingestion.parser import parse_document
 from src.ingestion.chunker import chunk_text
 from src.generation.prompt import build_rag_prompt
 from src.generation.llm import LLMClient, LLMUnavailableError
+
 from src.main import app
+from src.config.settings import settings
+
+settings.api_key = "test-api-key"
 from src.ingestion.cleaner import clean_text
 from src.retrieval.embedder import TextEmbedder
 from src.retrieval.vector_store import VectorStore
@@ -27,7 +31,38 @@ from src.evaluation.dataset import EVALUATION_DATASET
 from src.evaluation.retrieval import evaluate_retrieval
 
 
-client = TestClient(app)
+client = TestClient(
+    app,
+    headers={"X-API-Key": "test-api-key"},
+)
+
+def test_protected_endpoint_rejects_missing_api_key():
+    response = client.get(
+        "/documents",
+        headers={"X-API-Key": ""},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or missing API key."
+
+
+def test_protected_endpoint_rejects_invalid_api_key():
+    response = client.get(
+        "/documents",
+        headers={"X-API-Key": "wrong-api-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or missing API key."
+
+
+def test_health_endpoint_is_public():
+    response = client.get(
+        "/health",
+        headers={"X-API-Key": "wrong-api-key"},
+    )
+
+    assert response.status_code == 200
 
 def test_upload_document():
     from src.api import routes
@@ -1644,3 +1679,4 @@ def test_query_returns_503_for_llm_unavailable_error(monkeypatch):
         )
 
     assert exc_info.value.status_code == 503
+    
