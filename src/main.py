@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,7 +8,7 @@ from src.api.routes import components, router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    components._initialize()
+    await asyncio.to_thread(components._initialize)
     yield
 
 
