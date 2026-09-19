@@ -2,7 +2,6 @@ import os
 
 import requests
 import streamlit as st
-from streamlit.errors import StreamlitSecretNotFoundError
 
 
 DEFAULT_API_URL = "https://enterprise-rag-assistant-ik30.onrender.com"
@@ -19,22 +18,24 @@ st.set_page_config(
 # Configuration
 # -----------------------------
 
-try:
-    secrets = st.secrets
-except StreamlitSecretNotFoundError:
-    secrets = {}
+api_url = os.getenv("RAG_API_URL")
+api_key = os.getenv("RAG_API_KEY")
 
-api_url = (
-    secrets.get(
-        "RAG_API_URL",
-        os.getenv("RAG_API_URL", DEFAULT_API_URL),
-    )
-).rstrip("/")
+if not api_url or not api_key:
+    try:
+        api_url = api_url or st.secrets.get(
+            "RAG_API_URL",
+            DEFAULT_API_URL,
+        )
+        api_key = api_key or st.secrets.get(
+            "RAG_API_KEY",
+            "",
+        )
+    except StreamlitSecretNotFoundError:
+        api_url = api_url or DEFAULT_API_URL
+        api_key = api_key or ""
 
-api_key = secrets.get(
-    "RAG_API_KEY",
-    os.getenv("RAG_API_KEY", ""),
-)
+api_url = api_url.rstrip("/")
 
 
 # -----------------------------
