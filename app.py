@@ -2,6 +2,7 @@ import os
 
 import requests
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 
 DEFAULT_API_URL = "https://enterprise-rag-assistant-ik30.onrender.com"
@@ -18,12 +19,19 @@ st.set_page_config(
 # Configuration
 # -----------------------------
 
-api_url = st.secrets.get(
-    "RAG_API_URL",
-    os.getenv("RAG_API_URL", DEFAULT_API_URL),
+try:
+    secrets = st.secrets
+except StreamlitSecretNotFoundError:
+    secrets = {}
+
+api_url = (
+    secrets.get(
+        "RAG_API_URL",
+        os.getenv("RAG_API_URL", DEFAULT_API_URL),
+    )
 ).rstrip("/")
 
-api_key = st.secrets.get(
+api_key = secrets.get(
     "RAG_API_KEY",
     os.getenv("RAG_API_KEY", ""),
 )
@@ -98,7 +106,7 @@ def authentication_available() -> bool:
 
     st.error(
         "Backend API authentication is not configured. "
-        "Configure RAG_API_KEY in Streamlit Secrets."
+        "Configure RAG_API_KEY in the frontend environment."
     )
 
     return False
