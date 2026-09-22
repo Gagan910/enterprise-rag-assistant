@@ -20,8 +20,140 @@ from src.generation.llm import LLMClient, LLMUnavailableError
 
 from src.main import app
 from src.config.settings import settings
+from src.api.routes import get_workspace_id
 
 settings.api_key = "test-api-key"
+from hashlib import sha256
+
+TEST_WORKSPACE_ID = (
+    f"workspace-{sha256(settings.api_key.encode()).hexdigest()[:16]}"
+)
+
+def test_different_api_keys_produce_different_workspace_ids(monkeypatch):
+    from src.api.routes import get_workspace_id
+
+    api_key_a = "user-a-api-key"
+    api_key_b = "user-b-api-key"
+
+    monkeypatch.setattr(
+        settings,
+        "api_key",
+        api_key_a,
+    )
+
+    workspace_a = get_workspace_id(api_key_a)
+
+    monkeypatch.setattr(
+        settings,
+        "api_key",
+        api_key_b,
+    )
+
+    workspace_b = get_workspace_id(api_key_b)
+
+    assert workspace_a == (
+        f"workspace-{sha256(api_key_a.encode()).hexdigest()[:16]}"
+    )
+
+    assert workspace_b == (
+        f"workspace-{sha256(api_key_b.encode()).hexdigest()[:16]}"
+    )
+
+    assert workspace_a != workspace_b
+
+def test_api_keys_map_to_configured_workspaces(monkeypatch):
+    from src.api.routes import get_workspace_id
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    workspace_a = get_workspace_id("user-a-api-key")
+    workspace_b = get_workspace_id("user-b-api-key")
+
+    assert workspace_a == "workspace-a"
+    assert workspace_b == "workspace-b"
+    assert workspace_a != workspace_b
+    
+def test_legacy_and_multi_api_keys_can_coexist(monkeypatch):
+    from src.api.routes import get_workspace_id
+
+    legacy_api_key = "legacy-api-key"
+
+    monkeypatch.setattr(
+        settings,
+        "api_key",
+        legacy_api_key,
+    )
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    legacy_workspace = get_workspace_id(legacy_api_key)
+    workspace_a = get_workspace_id("user-a-api-key")
+    workspace_b = get_workspace_id("user-b-api-key")
+
+    assert legacy_workspace == (
+        f"workspace-{sha256(legacy_api_key.encode()).hexdigest()[:16]}"
+    )
+
+    assert workspace_a == "workspace-a"
+    assert workspace_b == "workspace-b"
+
+    assert len(
+        {legacy_workspace, workspace_a, workspace_b}
+    ) == 3
+    
+def test_invalid_api_key_is_rejected_with_multi_key_configuration(monkeypatch):
+    from src.api.routes import get_workspace_id
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_workspace_id("invalid-api-key")
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid or missing API key."
+    
+def test_malformed_api_keys_configuration_returns_503(monkeypatch):
+    from src.api.routes import get_workspace_id
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,INVALID_ENTRY",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_workspace_id("user-a-api-key")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "API key configuration is invalid."
+
+def test_duplicate_api_keys_configuration_returns_503(monkeypatch):
+    from src.api.routes import get_workspace_id
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-a-api-key:workspace-b",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_workspace_id("user-a-api-key")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "API key configuration is invalid."
+
 from src.ingestion.cleaner import clean_text
 from src.retrieval.embedder import TextEmbedder
 from src.retrieval.vector_store import VectorStore
@@ -126,8 +258,35 @@ def test_health():
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
-def test_query():
-    with patch("src.api.routes.LLMClient.generate", side_effect=mock_llm_response):
+def test_query(monkeypatch):
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            assert where == {
+                "workspace_id": TEST_WORKSPACE_ID,
+            }
+
+            return [
+                {
+                    "id": "test-document-id-0",
+                    "text": "Employees receive 20 days of paid annual leave.",
+                    "metadata": {
+                        "source": "sample.txt",
+                        "chunk_id": 0,
+                        "document_id": "test-document-id",
+                        "workspace_id": TEST_WORKSPACE_ID,
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(
+        "src.api.routes.retriever",
+        FakeRetriever(),
+    )
+
+    with patch(
+        "src.api.routes.LLMClient.generate",
+        side_effect=mock_llm_response,
+    ):
         response = client.post(
             "/query",
             json={
@@ -921,7 +1080,10 @@ def test_query_passes_document_id_filter():
     mock_retrieve.assert_called_once()
 
     assert mock_retrieve.call_args.kwargs["where"] == {
-        "document_id": "test-document-id"
+        "$and": [
+            {"workspace_id": TEST_WORKSPACE_ID},
+            {"document_id": "test-document-id"},
+        ]
     }
 
 def test_retriever_rejects_zero_top_k():
@@ -1062,6 +1224,7 @@ def test_list_documents_contains_sample_document(tmp_path):
                 "source": "sample.txt",
                 "document_id": "test-document-id",
                 "chunk_id": 0,
+                "workspace_id": TEST_WORKSPACE_ID
             }
         ],
         ids=["test-document-id-0"],
@@ -1104,11 +1267,13 @@ def test_list_documents_groups_chunks(tmp_path):
                 "source": "multi.txt",
                 "document_id": "multi-document-id",
                 "chunk_id": 0,
+                "workspace_id": TEST_WORKSPACE_ID,
             },
             {
                 "source": "multi.txt",
                 "document_id": "multi-document-id",
                 "chunk_id": 1,
+                "workspace_id": TEST_WORKSPACE_ID,
             },
         ],
         ids=[
@@ -1134,6 +1299,242 @@ def test_list_documents_groups_chunks(tmp_path):
     assert document["source"] == "multi.txt"
     assert document["chunk_count"] == 2
     routes.vector_store = original_store
+    
+def test_list_documents_isolated_between_workspaces(tmp_path, monkeypatch):
+    from src.api import routes
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    original_store = routes.vector_store
+
+    test_store = VectorStore(
+        persist_directory=str(tmp_path / "chroma"),
+        collection_name="workspace_isolation_collection",
+    )
+
+    routes.vector_store = test_store
+
+    embedder = TextEmbedder()
+
+    test_store.collection.upsert(
+        documents=[
+            "Workspace A document.",
+            "Workspace B document.",
+        ],
+        embeddings=[
+            embedder.embed_text("Workspace A document."),
+            embedder.embed_text("Workspace B document."),
+        ],
+        metadatas=[
+            {
+                "source": "workspace-a.txt",
+                "document_id": "workspace-a-document",
+                "chunk_id": 0,
+                "workspace_id": "workspace-a",
+            },
+            {
+                "source": "workspace-b.txt",
+                "document_id": "workspace-b-document",
+                "chunk_id": 0,
+                "workspace_id": "workspace-b",
+            },
+        ],
+        ids=[
+            "workspace-a-document-0",
+            "workspace-b-document-0",
+        ],
+    )
+
+    try:
+        response_a = client.get(
+            "/documents",
+            headers={"X-API-Key": "user-a-api-key"},
+        )
+
+        response_b = client.get(
+            "/documents",
+            headers={"X-API-Key": "user-b-api-key"},
+        )
+    finally:
+        routes.vector_store = original_store
+
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+
+    documents_a = response_a.json()
+    documents_b = response_b.json()
+
+    assert [document["source"] for document in documents_a] == [
+        "workspace-a.txt"
+    ]
+
+    assert [document["source"] for document in documents_b] == [
+        "workspace-b.txt"
+    ]
+
+def test_get_document_isolated_between_workspaces(tmp_path, monkeypatch):
+    from src.api import routes
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    original_store = routes.vector_store
+
+    test_store = VectorStore(
+        persist_directory=str(tmp_path / "chroma"),
+        collection_name="get_workspace_isolation_collection",
+    )
+
+    routes.vector_store = test_store
+
+    embedder = TextEmbedder()
+
+    test_store.collection.upsert(
+        documents=["Workspace B private document."],
+        embeddings=[
+            embedder.embed_text("Workspace B private document.")
+        ],
+        metadatas=[
+            {
+                "source": "workspace-b-private.txt",
+                "document_id": "workspace-b-private-document",
+                "chunk_id": 0,
+                "workspace_id": "workspace-b",
+            }
+        ],
+        ids=["workspace-b-private-document-0"],
+    )
+
+    try:
+        response = client.get(
+            "/documents/workspace-b-private-document",
+            headers={"X-API-Key": "user-a-api-key"},
+        )
+    finally:
+        routes.vector_store = original_store
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Document not found."
+
+def test_delete_document_isolated_between_workspaces(tmp_path, monkeypatch):
+    from src.api import routes
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    original_store = routes.vector_store
+
+    test_store = VectorStore(
+        persist_directory=str(tmp_path / "chroma"),
+        collection_name="delete_workspace_isolation_collection",
+    )
+
+    routes.vector_store = test_store
+
+    embedder = TextEmbedder()
+
+    test_store.collection.upsert(
+        documents=["Workspace B private document."],
+        embeddings=[
+            embedder.embed_text("Workspace B private document.")
+        ],
+        metadatas=[
+            {
+                "source": "workspace-b-private.txt",
+                "document_id": "workspace-b-private-document",
+                "chunk_id": 0,
+                "workspace_id": "workspace-b",
+            }
+        ],
+        ids=["workspace-b-private-document-0"],
+    )
+
+    try:
+        response = client.delete(
+            "/documents/workspace-b-private-document",
+            headers={"X-API-Key": "user-a-api-key"},
+        )
+
+        remaining = test_store.get_by_document_id(
+            "workspace-b-private-document",
+            workspace_id="workspace-b",
+        )
+    finally:
+        routes.vector_store = original_store
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Document not found."
+
+    assert remaining["ids"] == ["workspace-b-private-document-0"]
+
+def test_query_isolated_between_workspaces(monkeypatch):
+    from src.api import routes
+
+    monkeypatch.setattr(
+        settings,
+        "api_keys",
+        "user-a-api-key:workspace-a,user-b-api-key:workspace-b",
+    )
+
+    captured_where = {}
+
+    class FakeRetriever:
+        def retrieve(self, query, top_k, rerank_top_k, where=None):
+            captured_where["where"] = where
+
+            return [
+                {
+                    "id": "workspace-a-document-0",
+                    "text": "Workspace A private information.",
+                    "metadata": {
+                        "source": "workspace-a-private.txt",
+                        "document_id": "workspace-a-document",
+                        "chunk_id": 0,
+                        "workspace_id": "workspace-a",
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(
+        "src.api.routes.retriever",
+        FakeRetriever(),
+    )
+
+    with patch(
+        "src.api.routes.LLMClient.generate",
+        side_effect=lambda *args, **kwargs: (
+            "Workspace A private information [Source 1]."
+        ),
+    ):
+        response = client.post(
+            "/query",
+            headers={"X-API-Key": "user-a-api-key"},
+            json={
+                "question": "What is the private information?",
+                "top_k": 1,
+            },
+        )
+
+    assert response.status_code == 200
+
+    assert captured_where["where"] == {
+        "workspace_id": "workspace-a"
+    }
+
+    data = response.json()
+
+    assert data["sources"]
+    assert data["sources"][0]["source"] == "workspace-a-private.txt"
 
 def test_get_document():
     from src.api import routes
@@ -1150,6 +1551,7 @@ def test_get_document():
                 "source": "lookup.txt",
                 "document_id": document_id,
                 "chunk_id": 0,
+                "workspace_id": TEST_WORKSPACE_ID,
             }
         ],
         ids=[f"{document_id}-0"],
@@ -1204,6 +1606,7 @@ def test_delete_document():
                 "source": "delete.txt",
                 "document_id": document_id,
                 "chunk_id": 0,
+                "workspace_id": TEST_WORKSPACE_ID,
             }
         ],
         ids=[f"{document_id}-0"],

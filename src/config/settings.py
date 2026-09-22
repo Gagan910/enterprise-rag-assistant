@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     gemini_api_key: str
     api_key: str | None = None
+    api_keys: str | None = None
     groq_api_key: str | None = None
 
     llm_provider: str = "gemini"

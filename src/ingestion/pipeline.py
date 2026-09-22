@@ -1,10 +1,10 @@
 import hashlib
 from pathlib import Path
 
+from src.config.settings import settings
 from src.ingestion.chunker import chunk_text
 from src.ingestion.cleaner import clean_text
 from src.ingestion.parser import parse_document
-from src.config.settings import settings
 
 
 class IngestionPipeline:
@@ -37,7 +37,11 @@ class IngestionPipeline:
         if ids:
             self.vector_store.delete(ids)
 
-    def ingest(self, file_path: str) -> int:
+    def ingest(
+        self,
+        file_path: str,
+        workspace_id: str | None = None,
+    ) -> int:
         """Parse, clean, chunk, embed, and store a document."""
 
         path = Path(file_path)
@@ -64,6 +68,11 @@ class IngestionPipeline:
                 "file_path": str(path),
                 "document_id": document_id,
                 "chunk_id": chunk.chunk_id,
+                **(
+                    {"workspace_id": workspace_id}
+                    if workspace_id
+                    else {}
+                ),
             }
             for chunk in chunks
         ]

@@ -19,22 +19,85 @@ api_key_header = APIKeyHeader(
     auto_error=False,
 )
 
+def _get_api_key_workspaces() -> dict[str, str]:
+    """Build the API-key-to-workspace mapping from configuration."""
 
-def require_api_key(api_key: str | None = Depends(api_key_header)) -> None:
-    """Require a valid API key for protected endpoints."""
+    workspaces: dict[str, str] = {}
 
-    if not settings.api_key:
+    if settings.api_key:
+        workspaces[settings.api_key] = (
+            f"workspace-{sha256(settings.api_key.encode()).hexdigest()[:16]}"
+        )
+
+    if settings.api_keys:
+        for entry in settings.api_keys.split(","):
+            entry = entry.strip()
+
+            if not entry:
+                continue
+
+            try:
+                api_key, workspace_id = entry.split(":", 1)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="API key configuration is invalid.",
+                ) from exc
+
+            api_key = api_key.strip()
+            workspace_id = workspace_id.strip()
+
+            if not api_key or not workspace_id:
+                raise HTTPException(
+                    status_code=503,
+                    detail="API key configuration is invalid.",
+                )
+
+            if api_key in workspaces:
+                raise HTTPException(
+                    status_code=503,
+                    detail="API key configuration is invalid.",
+                )
+
+            workspaces[api_key] = workspace_id
+
+    return workspaces
+
+
+def _get_workspace_for_api_key(api_key: str | None) -> str:
+    """Return the workspace associated with an authenticated API key."""
+
+    workspaces = _get_api_key_workspaces()
+
+    if not workspaces:
         raise HTTPException(
             status_code=503,
             detail="API authentication is not configured.",
         )
 
-    if api_key != settings.api_key:
+    if not api_key or api_key not in workspaces:
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key.",
         )
 
+    return workspaces[api_key]
+
+
+def require_api_key(
+    api_key: str | None = Depends(api_key_header),
+) -> None:
+    """Require a valid API key."""
+
+    _get_workspace_for_api_key(api_key)
+
+
+def get_workspace_id(
+    api_key: str | None = Depends(api_key_header),
+) -> str:
+    """Return the workspace associated with the authenticated API key."""
+
+    return _get_workspace_for_api_key(api_key)
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
@@ -171,7 +234,10 @@ MAX_UPLOAD_SIZE = 10 * 1024 * 1024
     response_model=DocumentInfo,
     dependencies=[Depends(require_api_key)],
 )
-async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
+async def upload_document(
+    file: UploadFile = File(...),
+    workspace_id: str = Depends(get_workspace_id),
+) -> DocumentInfo:
     filename = Path(file.filename or "").name
 
     if not filename:
@@ -205,7 +271,10 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
     document_id = sha256(content).hexdigest()[:16]
 
     try:
-        existing = vector_store.get_by_document_id(document_id)
+        existing = vector_store.get_by_document_id(
+            document_id,
+            workspace_id=workspace_id,
+        )
         existing_metadatas = existing.get("metadatas", [])
 
         if existing_metadatas:
@@ -221,10 +290,16 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
         file_path = document_directory / filename
         file_path.write_bytes(content)
 
-        chunk_count = ingestion_pipeline.ingest(str(file_path))
+        chunk_count = ingestion_pipeline.ingest(
+            str(file_path),
+            workspace_id=workspace_id,
+        )
 
         if chunk_count == 0:
-            results = vector_store.get_by_document_id(document_id)
+            results = vector_store.get_by_document_id(
+                document_id,
+                workspace_id=workspace_id,
+            )
             metadatas = results.get("metadatas", [])
 
             if not metadatas:
@@ -265,9 +340,12 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentInfo:
 def list_documents(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=100),
+    workspace_id: str = Depends(get_workspace_id),
 ) -> list[DocumentInfo]:
     try:
-        results = vector_store.get_all_documents()
+        results = vector_store.get_all_documents(
+            workspace_id=workspace_id,
+        )
 
         metadatas = results.get("metadatas", [])
 
@@ -303,7 +381,10 @@ def list_documents(
     response_model=DocumentInfo,
     dependencies=[Depends(require_api_key)],
 )
-def get_document(document_id: str) -> DocumentInfo:
+def get_document(
+    document_id: str,
+    workspace_id: str = Depends(get_workspace_id),
+) -> DocumentInfo:
     try:
         if not document_id.strip():
             raise HTTPException(
@@ -311,7 +392,10 @@ def get_document(document_id: str) -> DocumentInfo:
                 detail="document_id cannot be empty.",
             )
 
-        results = vector_store.get_by_document_id(document_id)
+        results = vector_store.get_by_document_id(
+            document_id,
+            workspace_id=workspace_id,
+        )
 
         metadatas = results.get("metadatas", [])
 
@@ -343,7 +427,10 @@ def get_document(document_id: str) -> DocumentInfo:
     "/documents/{document_id}",
     dependencies=[Depends(require_api_key)],
 )
-def delete_document(document_id: str) -> dict[str, str]:
+def delete_document(
+    document_id: str,
+    workspace_id: str = Depends(get_workspace_id),
+) -> dict:
     try:
         if not document_id.strip():
             raise HTTPException(
@@ -351,7 +438,10 @@ def delete_document(document_id: str) -> dict[str, str]:
                 detail="document_id cannot be empty.",
             )
 
-        results = vector_store.get_by_document_id(document_id)
+        results = vector_store.get_by_document_id(
+            document_id,
+            workspace_id=workspace_id,
+        )
 
         if not results.get("ids"):
             raise HTTPException(
@@ -386,13 +476,22 @@ def health_check() -> dict[str, str]:
     response_model=QueryResponse,
     dependencies=[Depends(require_api_key)],
 )
-async def query(request: QueryRequest) -> QueryResponse:
+async def query(
+    request: QueryRequest,
+    workspace_id: str = Depends(get_workspace_id),
+) -> QueryResponse:
     try:
-        where = (
-            {"document_id": request.document_id}
-            if request.document_id
-            else None
-        )
+        if request.document_id:
+            where = {
+                "$and": [
+                    {"workspace_id": workspace_id},
+                    {"document_id": request.document_id},
+                ]
+            }
+        else:
+            where = {
+                "workspace_id": workspace_id,
+            }
 
         retrieval_start = time.perf_counter()
 

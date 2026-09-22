@@ -99,20 +99,40 @@ class VectorStore:
             where=where,
         )
 
-    def get_by_document_id(self, document_id: str) -> dict[str, Any]:
-        """Return all chunks belonging to a document."""
+    def get_by_document_id(
+        self,
+        document_id: str,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return all chunks belonging to a document, optionally scoped to a workspace."""
         if not isinstance(document_id, str):
             raise TypeError("document_id must be a string")
 
         if not document_id.strip():
             raise ValueError("document_id cannot be empty")
 
-        return self.collection.get(
-            where={"document_id": document_id}
-        )
+        if workspace_id:
+            where = {
+                "$and": [
+                    {"document_id": document_id},
+                    {"workspace_id": workspace_id},
+                ]
+            }
+        else:
+            where = {"document_id": document_id}
 
-    def get_all_documents(self) -> dict[str, Any]:
-        """Return all stored chunks and metadata."""
+        return self.collection.get(where=where)
+
+    def get_all_documents(
+        self,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return all stored chunks, optionally scoped to a workspace."""
+        if workspace_id:
+            return self.collection.get(
+                where={"workspace_id": workspace_id}
+            )
+
         return self.collection.get()
 
     def count(self) -> int:

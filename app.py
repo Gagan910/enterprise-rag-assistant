@@ -19,23 +19,47 @@ st.set_page_config(
 # -----------------------------
 
 api_url = os.getenv("RAG_API_URL")
-api_key = os.getenv("RAG_API_KEY")
 
-if not api_url or not api_key:
+if not api_url:
     try:
-        api_url = api_url or st.secrets.get(
+        api_url = st.secrets.get(
             "RAG_API_URL",
             DEFAULT_API_URL,
         )
-        api_key = api_key or st.secrets.get(
-            "RAG_API_KEY",
-            "",
-        )
     except StreamlitSecretNotFoundError:
-        api_url = api_url or DEFAULT_API_URL
-        api_key = api_key or ""
+        api_url = DEFAULT_API_URL
 
 api_url = api_url.rstrip("/")
+
+
+# -----------------------------
+# Authentication
+# -----------------------------
+
+if "api_key" not in st.session_state:
+    st.session_state.api_key = ""
+
+
+with st.sidebar:
+    st.header("⚙️ Connection")
+
+    api_key_input = st.text_input(
+        "API Key",
+        value=st.session_state.api_key,
+        type="password",
+        placeholder="Enter your API key",
+        help="Your API key determines which workspace you can access.",
+    )
+
+    if api_key_input != st.session_state.api_key:
+        st.session_state.api_key = api_key_input
+
+    if st.session_state.api_key:
+        st.success("API key configured.")
+    else:
+        st.warning("Enter your API key to access your workspace.")
+
+    st.divider()
 
 
 # -----------------------------
@@ -47,19 +71,10 @@ st.caption("AI-powered document search, retrieval, and grounded answers.")
 
 
 # -----------------------------
-# Authentication status
+# Backend status
 # -----------------------------
 
 with st.sidebar:
-    st.header("⚙️ Connection")
-
-    if api_key:
-        st.success("API authentication configured.")
-    else:
-        st.error("API authentication is not configured.")
-
-    st.divider()
-
     if st.button(
         "🔌 Check Backend",
         use_container_width=True,
@@ -83,7 +98,7 @@ with st.sidebar:
 
 def api_headers() -> dict[str, str]:
     return {
-        "X-API-Key": api_key,
+        "X-API-Key": st.session_state.api_key,
     }
 
 
@@ -102,12 +117,12 @@ def show_api_error(response: requests.Response) -> None:
 
 
 def authentication_available() -> bool:
-    if api_key:
+    if st.session_state.api_key:
         return True
 
     st.error(
-        "Backend API authentication is not configured. "
-        "Configure RAG_API_KEY in the frontend environment."
+        "Authentication required. "
+        "Enter your API key in the sidebar."
     )
 
     return False
