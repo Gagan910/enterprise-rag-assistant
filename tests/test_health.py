@@ -926,6 +926,161 @@ def test_document_id_is_deterministic():
     assert first_id == second_id
     assert len(first_id) == 16
 
+def test_ingestion_pipeline_same_workspace_rejects_duplicate(tmp_path):
+    from src.ingestion.pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(
+        embedder=TextEmbedder(),
+        vector_store=VectorStore(
+            persist_directory=str(tmp_path / "chroma"),
+            collection_name="same_workspace_duplicate_collection",
+        ),
+    )
+
+    file_path = tmp_path / "duplicate.txt"
+    file_path.write_text(
+        "The same document is uploaded twice to one workspace.",
+        encoding="utf-8",
+    )
+
+    first_ingest = pipeline.ingest(
+        str(file_path),
+        workspace_id="workspace-a",
+    )
+    second_ingest = pipeline.ingest(
+        str(file_path),
+        workspace_id="workspace-a",
+    )
+
+    assert first_ingest > 0
+    assert second_ingest == 0
+    assert pipeline.vector_store.count() == first_ingest
+
+
+def test_ingestion_pipeline_allows_same_document_in_different_workspaces(tmp_path):
+    from src.ingestion.pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(
+        embedder=TextEmbedder(),
+        vector_store=VectorStore(
+            persist_directory=str(tmp_path / "chroma"),
+            collection_name="cross_workspace_duplicate_collection",
+        ),
+    )
+
+    file_path = tmp_path / "shared.txt"
+    file_path.write_text(
+        "The same document can belong to different workspaces.",
+        encoding="utf-8",
+    )
+
+    workspace_a_chunks = pipeline.ingest(
+        str(file_path),
+        workspace_id="workspace-a",
+    )
+    workspace_b_chunks = pipeline.ingest(
+        str(file_path),
+        workspace_id="workspace-b",
+    )
+
+    assert workspace_a_chunks > 0
+    assert workspace_b_chunks == workspace_a_chunks
+    assert pipeline.vector_store.count() == (
+        workspace_a_chunks + workspace_b_chunks
+    )
+
+    document_id = pipeline._document_id(file_path)
+
+    workspace_a = pipeline.vector_store.get_by_document_id(
+        document_id,
+        workspace_id="workspace-a",
+    )
+    workspace_b = pipeline.vector_store.get_by_document_id(
+        document_id,
+        workspace_id="workspace-b",
+    )
+
+    assert workspace_a["ids"]
+    assert workspace_b["ids"]
+    assert set(workspace_a["ids"]).isdisjoint(set(workspace_b["ids"]))
+
+
+def test_vector_store_document_lookup_is_workspace_scoped(tmp_path):
+    store = VectorStore(
+        persist_directory=str(tmp_path / "chroma"),
+        collection_name="workspace_scoped_lookup_collection",
+    )
+
+    store.add_chunks(
+        chunks=[
+            "Workspace A document.",
+            "Workspace B document.",
+        ],
+        embeddings=[
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        metadatas=[
+            {
+                "source": "shared.txt",
+                "document_id": "shared-document",
+                "workspace_id": "workspace-a",
+            },
+            {
+                "source": "shared.txt",
+                "document_id": "shared-document",
+                "workspace_id": "workspace-b",
+            },
+        ],
+        ids=[
+            "shared-document-workspace-a-0",
+            "shared-document-workspace-b-0",
+        ],
+    )
+
+    workspace_a = store.get_by_document_id(
+        "shared-document",
+        workspace_id="workspace-a",
+    )
+    workspace_b = store.get_by_document_id(
+        "shared-document",
+        workspace_id="workspace-b",
+    )
+
+    assert workspace_a["ids"] == ["shared-document-workspace-a-0"]
+    assert workspace_b["ids"] == ["shared-document-workspace-b-0"]
+
+
+def test_ingestion_pipeline_workspace_chunk_ids_are_distinct(tmp_path):
+    from src.ingestion.pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(
+        embedder=TextEmbedder(),
+        vector_store=VectorStore(
+            persist_directory=str(tmp_path / "chroma"),
+            collection_name="workspace_chunk_id_collection",
+        ),
+    )
+
+    file_path = tmp_path / "ids.txt"
+    file_path.write_text(
+        "Workspace-specific chunk IDs prevent cross-workspace collisions.",
+        encoding="utf-8",
+    )
+
+    pipeline.ingest(str(file_path), workspace_id="workspace-a")
+    pipeline.ingest(str(file_path), workspace_id="workspace-b")
+
+    document_id = pipeline._document_id(file_path)
+    results = pipeline.vector_store.collection.get()
+
+    ids = results["ids"]
+
+    assert len(ids) == 2
+    assert all(chunk_id.startswith(document_id) for chunk_id in ids)
+    assert len(set(ids)) == 2
+
+
 def test_vector_store_exists():
     store = VectorStore(
         persist_directory="data/test_exists_chroma",
