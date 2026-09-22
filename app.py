@@ -195,6 +195,48 @@ with left_col:
                     f"ID: "
                     f"{document.get('document_id', 'Unknown')}"
                 )
+
+                document_id = document.get("document_id")
+
+                if document_id:
+                    if st.button(
+                        "🗑️ Delete",
+                        key=f"delete-{document_id}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            with st.spinner(
+                                f"Deleting {document.get('source', 'document')}..."
+                            ):
+                                response = requests.delete(
+                                    f"{api_url}/documents/{document_id}",
+                                    headers=api_headers(),
+                                    timeout=60,
+                                )
+
+                            if response.ok:
+                                st.success(
+                                    f"{document.get('source', 'Document')} deleted successfully."
+                                )
+
+                                # Remove the deleted document from the
+                                # current workspace's cached list.
+                                st.session_state["documents"] = [
+                                    item
+                                    for item in st.session_state.get(
+                                        "documents", []
+                                    )
+                                    if item.get("document_id") != document_id
+                                ]
+
+                                st.rerun()
+                            else:
+                                show_api_error(response)
+
+                        except requests.RequestException as exc:
+                            st.error(
+                                f"Connection failed: {exc}"
+                            )
     else:
         st.info(
             "Click Refresh Documents to load indexed documents."
