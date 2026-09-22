@@ -4,6 +4,7 @@ import requests
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 from supabase import Client, create_client
+from supabase.lib.client_options import ClientOptions
 
 
 DEFAULT_API_URL = "https://enterprise-rag-assistant-ik30.onrender.com"
@@ -11,7 +12,7 @@ DEFAULT_API_URL = "https://enterprise-rag-assistant-ik30.onrender.com"
 
 st.set_page_config(
     page_title="Enterprise RAG Assistant",
-    page_icon="📄",
+    page_icon="R",
     layout="wide",
 )
 
@@ -52,6 +53,10 @@ def get_secret(name: str, default: str = "") -> str:
 
 SUPABASE_URL = get_secret("SUPABASE_URL")
 SUPABASE_ANON_KEY = get_secret("SUPABASE_ANON_KEY")
+FRONTEND_URL = get_secret(
+    "RAG_FRONTEND_URL",
+    "https://enterprise-rag-frontend-g1bm.onrender.com",
+).rstrip("/")
 
 
 @st.cache_resource
@@ -60,7 +65,11 @@ def get_supabase_client() -> Client | None:
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return None
 
-    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    return create_client(
+        SUPABASE_URL,
+        SUPABASE_ANON_KEY,
+        options=ClientOptions(flow_type="pkce"),
+    )
 
 
 supabase = get_supabase_client()
@@ -78,6 +87,9 @@ if "supabase_session" not in st.session_state:
 
 if "supabase_user" not in st.session_state:
     st.session_state.supabase_user = None
+
+if "password_reset_mode" not in st.session_state:
+    st.session_state.password_reset_mode = False
 
 
 def current_access_token() -> str:
@@ -123,127 +135,365 @@ def sign_out() -> None:
     st.session_state.pop("last_answer", None)
 
 
-with st.sidebar:
-    st.header("🔐 Account")
+# -----------------------------
+# Login / Registration page
+# -----------------------------
+
+def extract_auth_session(response):
+    """Extract the session object from a Supabase auth response."""
+    if response is None:
+        return None
+
+    session = getattr(response, "session", None)
+
+    if session is not None:
+        return session
+
+    if isinstance(response, dict):
+        return response.get("session")
+
+    return None
+
+
+def process_auth_code() -> bool:
+    """Exchange a Supabase PKCE auth code returned by an email redirect."""
+    code = st.query_params.get("code")
+
+    if not code or supabase is None:
+        return False
+
+    try:
+        response = supabase.auth.exchange_code_for_session(
+            {"auth_code": code}
+        )
+        session = extract_auth_session(response)
+
+        if session is None:
+            st.error("Authentication callback did not return a session.")
+            return False
+
+        handle_auth_response(session)
+        st.query_params.clear()
+        return True
+
+    except Exception as exc:
+        st.error(f"Authentication callback failed: {exc}")
+        return False
+
+
+def get_user_email() -> str:
+    """Return the authenticated user's email."""
+    user = st.session_state.get("supabase_user")
+
+    if not user:
+        return ""
+
+    if isinstance(user, dict):
+        return user.get("email", "") or ""
+
+    return getattr(user, "email", "") or ""
+
+
+def render_auth_page() -> None:
+    """Render the authentication-only page."""
+    st.markdown(
+        """
+        <style>
+        .auth-shell {
+            max-width: 620px;
+            margin: 5vh auto 0 auto;
+            text-align: center;
+        }
+
+        .auth-subtitle {
+            color: #6b7280;
+            margin-bottom: 1.5rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
+    st.title("Enterprise RAG Assistant")
+    st.markdown(
+        '<div class="auth-subtitle">'
+        "Sign in to securely access your documents and AI assistant."
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     if supabase is None:
-        st.warning(
-            "Supabase authentication is not configured yet. "
-            "Set SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit secrets."
+        st.error(
+            "Authentication is not configured. "
+            "Please configure SUPABASE_URL and SUPABASE_ANON_KEY."
         )
-    elif st.session_state.supabase_user is None:
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
+
+    auth_container = st.container(border=True)
+
+    with auth_container:
         login_tab, register_tab = st.tabs(["Login", "Register"])
 
         with login_tab:
-            login_email = st.text_input("Email", key="login_email")
+            st.subheader("Welcome back")
+
+            login_email = st.text_input(
+                "Email",
+                key="login_email",
+                placeholder="you@example.com",
+            )
+
             login_password = st.text_input(
                 "Password",
                 type="password",
                 key="login_password",
+                placeholder="Enter your password",
             )
 
-            if st.button("🔑 Login", use_container_width=True, type="primary"):
+            if st.button(
+                "Login",
+                type="primary",
+                use_container_width=True,
+                key="login_button",
+            ):
                 if not login_email.strip() or not login_password:
-                    st.error("Enter your email and password.")
+                    st.warning("Enter both email and password.")
                 else:
                     try:
-                        response = supabase.auth.sign_in_with_password(
-                            {
-                                "email": login_email.strip(),
-                                "password": login_password,
-                            }
-                        )
-                        handle_auth_response(response.session)
-
-                        if response.session:
-                            st.success("Login successful.")
-                            st.rerun()
-                        else:
-                            st.error(
-                                "Login did not return a session. "
-                                "If email confirmation is enabled, confirm "
-                                "your email first."
+                        with st.spinner("Signing in..."):
+                            response = supabase.auth.sign_in_with_password(
+                                {
+                                    "email": login_email.strip(),
+                                    "password": login_password,
+                                }
                             )
+
+                        session = extract_auth_session(response)
+
+                        if session is None:
+                            st.error(
+                                "Login did not return an authenticated session."
+                            )
+                        else:
+                            handle_auth_response(session)
+                            st.rerun()
+
                     except Exception as exc:
                         st.error(f"Login failed: {exc}")
 
+            st.divider()
+            st.caption("Forgot your password?")
+
+            forgot_email = st.text_input(
+                "Account email",
+                key="forgot_email",
+                placeholder="you@example.com",
+            )
+
+            if st.button(
+                "Send reset email",
+                use_container_width=True,
+                key="forgot_password_button",
+            ):
+                email = forgot_email.strip()
+
+                if not email:
+                    st.warning("Enter the email address for your account.")
+                else:
+                    try:
+                        with st.spinner("Sending password reset email..."):
+                            supabase.auth.reset_password_for_email(
+                                email,
+                                {
+                                    "redirect_to": (
+                                        f"{FRONTEND_URL}/?mode=recovery"
+                                    )
+                                },
+                            )
+
+                        st.success(
+                            "If an account exists for that email, a password "
+                            "reset link has been sent. Check your inbox."
+                        )
+                    except Exception as exc:
+                        st.error(f"Could not send reset email: {exc}")
+
         with register_tab:
-            register_email = st.text_input("Email", key="register_email")
+            st.subheader("Create your account")
+
+            register_email = st.text_input(
+                "Email",
+                key="register_email",
+                placeholder="you@example.com",
+            )
+
             register_password = st.text_input(
                 "Password",
                 type="password",
                 key="register_password",
-            )
-            register_password_confirm = st.text_input(
-                "Confirm password",
-                type="password",
-                key="register_password_confirm",
+                placeholder="Minimum 6 characters",
             )
 
-            if st.button("📝 Create Account", use_container_width=True):
-                if not register_email.strip():
-                    st.error("Enter your email.")
+            register_confirm = st.text_input(
+                "Confirm password",
+                type="password",
+                key="register_confirm",
+                placeholder="Re-enter your password",
+            )
+
+            if st.button(
+                "Create account",
+                type="primary",
+                use_container_width=True,
+                key="register_button",
+            ):
+                email = register_email.strip()
+
+                if not email or not register_password:
+                    st.warning("Enter an email and password.")
                 elif len(register_password) < 6:
-                    st.error("Password must contain at least 6 characters.")
-                elif register_password != register_password_confirm:
-                    st.error("Passwords do not match.")
+                    st.warning("Password must be at least 6 characters.")
+                elif register_password != register_confirm:
+                    st.warning("Passwords do not match.")
                 else:
                     try:
-                        response = supabase.auth.sign_up(
-                            {
-                                "email": register_email.strip(),
-                                "password": register_password,
-                            }
-                        )
-                        if response.session:
-                            handle_auth_response(response.session)
-                            st.success("Account created.")
+                        with st.spinner("Creating your account..."):
+                            response = supabase.auth.sign_up(
+                                {
+                                    "email": email,
+                                    "password": register_password,
+                                }
+                            )
+
+                        session = extract_auth_session(response)
+
+                        if session is not None:
+                            handle_auth_response(session)
+                            st.success("Account created successfully.")
                             st.rerun()
                         else:
                             st.success(
-                                "Account created. Check your email and confirm "
-                                "your account before logging in."
+                                "Account created. Please check your email "
+                                "and confirm your account before logging in."
                             )
+
                     except Exception as exc:
                         st.error(f"Registration failed: {exc}")
-    else:
-        user = st.session_state.supabase_user
-        user_email = getattr(user, "email", None)
 
-        if user_email is None and isinstance(user, dict):
-            user_email = user.get("email")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        st.success(f"Logged in as {user_email or 'authenticated user'}")
 
-        if st.button("🚪 Logout", use_container_width=True):
-            sign_out()
-            st.rerun()
+# Process email confirmation / password-recovery callbacks before
+# rendering the authentication gate. Supabase PKCE returns an auth code
+# in the query string, which the Python client exchanges for a session.
+callback_mode = st.query_params.get("mode")
+if callback_mode == "recovery" and st.query_params.get("code"):
+    if process_auth_code():
+        st.session_state.password_reset_mode = True
+        st.rerun()
 
-    st.divider()
+elif st.query_params.get("code") and not current_access_token():
+    if process_auth_code():
+        st.rerun()
 
-    st.header("⚙️ Connection")
 
-    # Temporary compatibility with the current API-key backend.
-    api_key_input = st.text_input(
-        "API Key",
-        value=st.session_state.api_key,
-        type="password",
-        placeholder="Enter your API key",
-        help=(
-            "Temporary compatibility with the current backend. "
-            "Supabase authentication is being added in stages."
-        ),
+def render_password_reset_page() -> None:
+    """Render the authenticated password-change form after recovery."""
+    st.markdown(
+        """
+        <style>
+        .auth-shell {
+            max-width: 620px;
+            margin: 5vh auto 0 auto;
+            text-align: center;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
+    st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
+    st.title("Reset your password")
+    st.caption("Choose a new password for your Enterprise RAG Assistant account.")
 
-    if st.session_state.api_key:
-        st.success("API key configured.")
-    elif current_access_token():
-        st.info("Supabase session active.")
+    with st.container(border=True):
+        new_password = st.text_input(
+            "New password",
+            type="password",
+            key="new_password",
+            placeholder="Minimum 6 characters",
+        )
+        confirm_password = st.text_input(
+            "Confirm new password",
+            type="password",
+            key="confirm_new_password",
+            placeholder="Re-enter your new password",
+        )
+
+        if st.button(
+            "Update password",
+            type="primary",
+            use_container_width=True,
+            key="update_password_button",
+        ):
+            if len(new_password) < 6:
+                st.warning("Password must be at least 6 characters.")
+            elif new_password != confirm_password:
+                st.warning("Passwords do not match.")
+            else:
+                try:
+                    with st.spinner("Updating password..."):
+                        response = supabase.auth.update_user(
+                            {"password": new_password}
+                        )
+
+                    session = extract_auth_session(response)
+                    if session is not None:
+                        handle_auth_response(session)
+
+                    st.session_state.password_reset_mode = False
+                    st.session_state.pop("new_password", None)
+                    st.session_state.pop("confirm_new_password", None)
+                    st.success("Password updated successfully. You are now signed in.")
+                    st.rerun()
+
+                except Exception as exc:
+                    st.error(f"Could not update password: {exc}")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# Authentication is the first screen. Nothing from the RAG dashboard
+# is rendered until a valid Supabase session exists.
+if st.session_state.password_reset_mode:
+    if current_access_token():
+        render_password_reset_page()
+        st.stop()
+    st.session_state.password_reset_mode = False
+
+if not current_access_token():
+    render_auth_page()
+    st.stop()
+
+
+# -----------------------------
+# Authenticated account sidebar
+# -----------------------------
+
+with st.sidebar:
+    st.header("Account")
+
+    email = get_user_email()
+    if email:
+        st.caption("Signed in as")
+        st.write(f"**{email}**")
     else:
-        st.warning("Authentication is required to access the current backend.")
+        st.success("Authenticated with Supabase.")
+
+    if st.button("Logout", use_container_width=True):
+        sign_out()
 
     st.divider()
 
@@ -251,7 +501,7 @@ with st.sidebar:
 # Header
 # -----------------------------
 
-st.title("📄 Enterprise Document Intelligence & RAG Assistant")
+st.title("Enterprise Document Intelligence & RAG Assistant")
 st.caption("AI-powered document search, retrieval, and grounded answers.")
 
 
@@ -261,7 +511,7 @@ st.caption("AI-powered document search, retrieval, and grounded answers.")
 
 with st.sidebar:
     if st.button(
-        "🔌 Check Backend",
+        "Check Backend",
         use_container_width=True,
     ):
         try:
@@ -282,17 +532,15 @@ with st.sidebar:
 
 
 def api_headers() -> dict[str, str]:
-    """Build backend authentication headers."""
-    headers: dict[str, str] = {}
-
+    """Build backend authentication headers using the Supabase JWT."""
     token = current_access_token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
 
-    if st.session_state.api_key:
-        headers["X-API-Key"] = st.session_state.api_key
+    if not token:
+        return {}
 
-    return headers
+    return {
+        "Authorization": f"Bearer {token}",
+    }
 
 
 def show_api_error(response: requests.Response) -> None:
@@ -310,18 +558,11 @@ def show_api_error(response: requests.Response) -> None:
 
 
 def authentication_available() -> bool:
-    """Check that at least one supported authentication mechanism exists."""
+    """Check that the current user has an authenticated Supabase session."""
     if current_access_token():
         return True
 
-    if st.session_state.api_key:
-        return True
-
-    st.error(
-        "Authentication required. "
-        "Log in with Supabase or enter an API key in the sidebar."
-    )
-
+    st.error("Authentication required. Please log in again.")
     return False
 
 
@@ -340,10 +581,10 @@ left_col, main_col = st.columns(
 # ============================================================
 
 with left_col:
-    st.subheader("📚 Documents")
+    st.subheader("Documents")
 
     if st.button(
-        "🔄 Refresh Documents",
+        "Refresh Documents",
         use_container_width=True,
     ):
         if authentication_available():
@@ -441,7 +682,7 @@ with left_col:
 
     st.divider()
 
-    st.subheader("⬆️ Upload")
+    st.subheader("Upload")
 
     uploaded_file = st.file_uploader(
         "Upload PDF, DOCX, or TXT",
@@ -511,7 +752,7 @@ with left_col:
 # ============================================================
 
 with main_col:
-    st.subheader("💬 Ask Your Documents")
+    st.subheader("Ask Your Documents")
 
     question = st.text_area(
         "Your question",
@@ -586,7 +827,7 @@ with main_col:
     if answer_data:
         st.divider()
 
-        st.markdown("### 🧠 Answer")
+        st.markdown("### Answer")
 
         st.markdown(
             answer_data.get(
@@ -605,15 +846,15 @@ with main_col:
             [],
         )
 
-        st.markdown("### ⚡ Generation")
+        st.markdown("### Generation")
 
         if (
             fallback_used
             and len(provider_attempts) >= 2
         ):
             st.info(
-                f"{provider_attempts[0].title()} unavailable → "
-                f"{provider_attempts[1].title()} fallback → "
+                f"{provider_attempts[0].title()} unavailable â†’ "
+                f"{provider_attempts[1].title()} fallback â†’ "
                 f"Answer generated"
             )
 
@@ -641,7 +882,7 @@ with main_col:
             [],
         )
 
-        st.markdown("### 📚 Sources")
+        st.markdown("### Sources")
 
         if sources:
             for index, source in enumerate(
@@ -649,7 +890,7 @@ with main_col:
                 start=1,
             ):
                 st.markdown(
-                    f"**Source {index}** — "
+                    f"**Source {index}** â€” "
                     f"{source.get('source', 'Unknown')} "
                     f"(chunk "
                     f"{source.get('chunk_id', 'Unknown')})"
