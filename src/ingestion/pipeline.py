@@ -23,6 +23,16 @@ class IngestionPipeline:
         """Generate a deterministic document ID from document content."""
         return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
+    @staticmethod
+    def _workspace_id(workspace_id: str | None) -> str | None:
+        """Return a deterministic short workspace identifier for vector IDs."""
+        if not workspace_id:
+            return None
+
+        return hashlib.sha256(
+            workspace_id.encode("utf-8")
+        ).hexdigest()[:16]
+
     def delete_document(self, file_path: str) -> None:
         """Delete all stored chunks belonging to a document."""
         path = Path(file_path)
@@ -59,6 +69,22 @@ class IngestionPipeline:
         if not chunks:
             return 0
 
+        # A document with the same content is considered already indexed
+        # only when it already exists inside the same workspace.
+        #
+        # This check must be workspace-aware. Chroma document IDs are global
+        # within a collection, so checking only the raw chunk ID can cause a
+        # document uploaded to workspace B to be treated as already indexed
+        # because the same file was previously uploaded to workspace A.
+        if workspace_id:
+            existing = self.vector_store.get_by_document_id(
+                document_id,
+                workspace_id=workspace_id,
+            )
+
+            if existing.get("ids"):
+                return 0
+
         texts = [chunk.text for chunk in chunks]
         embeddings = self.embedder.embed_texts(texts)
 
@@ -77,10 +103,19 @@ class IngestionPipeline:
             for chunk in chunks
         ]
 
-        ids = [
-            f"{document_id}-{chunk.chunk_id}"
-            for chunk in chunks
-        ]
+        workspace_hash = self._workspace_id(workspace_id)
+
+        if workspace_hash:
+            ids = [
+                f"{document_id}-{workspace_hash}-{chunk.chunk_id}"
+                for chunk in chunks
+            ]
+        else:
+            # Preserve the legacy ID format for non-workspace ingestion.
+            ids = [
+                f"{document_id}-{chunk.chunk_id}"
+                for chunk in chunks
+            ]
 
         if all(self.vector_store.exists([chunk_id]) for chunk_id in ids):
             return 0
@@ -93,4 +128,3 @@ class IngestionPipeline:
         )
 
         return len(chunks)
-    
