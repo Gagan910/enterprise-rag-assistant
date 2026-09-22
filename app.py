@@ -2,6 +2,8 @@ import os
 
 import requests
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
+from supabase import Client, create_client
 
 
 DEFAULT_API_URL = "https://enterprise-rag-assistant-ik30.onrender.com"
@@ -33,22 +35,204 @@ api_url = api_url.rstrip("/")
 
 
 # -----------------------------
+# Supabase configuration
+# -----------------------------
+
+def get_secret(name: str, default: str = "") -> str:
+    """Read a Streamlit secret, then fall back to an environment variable."""
+    try:
+        value = st.secrets.get(name)
+        if value:
+            return str(value)
+    except StreamlitSecretNotFoundError:
+        pass
+
+    return os.getenv(name, default)
+
+
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_ANON_KEY = get_secret("SUPABASE_ANON_KEY")
+
+
+@st.cache_resource
+def get_supabase_client() -> Client | None:
+    """Create the Supabase client when configuration is available."""
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return None
+
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+
+supabase = get_supabase_client()
+
+
+# -----------------------------
 # Authentication
 # -----------------------------
 
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
 
+if "supabase_session" not in st.session_state:
+    st.session_state.supabase_session = None
+
+if "supabase_user" not in st.session_state:
+    st.session_state.supabase_user = None
+
+
+def current_access_token() -> str:
+    """Return the current Supabase access token, if available."""
+    session = st.session_state.get("supabase_session")
+
+    if not session:
+        return ""
+
+    if isinstance(session, dict):
+        return session.get("access_token", "")
+
+    return getattr(session, "access_token", "") or ""
+
+
+def handle_auth_response(session) -> None:
+    """Store a Supabase authentication session in Streamlit state."""
+    if session is None:
+        return
+
+    st.session_state.supabase_session = session
+
+    user = getattr(session, "user", None)
+
+    if user is None and isinstance(session, dict):
+        user = session.get("user")
+
+    st.session_state.supabase_user = user
+
+
+def sign_out() -> None:
+    """Sign out and clear the local authentication state."""
+    if supabase is not None:
+        try:
+            supabase.auth.sign_out()
+        except Exception:
+            pass
+
+    st.session_state.supabase_session = None
+    st.session_state.supabase_user = None
+    st.session_state.api_key = ""
+    st.session_state.pop("documents", None)
+    st.session_state.pop("last_answer", None)
+
 
 with st.sidebar:
+    st.header("🔐 Account")
+
+    if supabase is None:
+        st.warning(
+            "Supabase authentication is not configured yet. "
+            "Set SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit secrets."
+        )
+    elif st.session_state.supabase_user is None:
+        login_tab, register_tab = st.tabs(["Login", "Register"])
+
+        with login_tab:
+            login_email = st.text_input("Email", key="login_email")
+            login_password = st.text_input(
+                "Password",
+                type="password",
+                key="login_password",
+            )
+
+            if st.button("🔑 Login", use_container_width=True, type="primary"):
+                if not login_email.strip() or not login_password:
+                    st.error("Enter your email and password.")
+                else:
+                    try:
+                        response = supabase.auth.sign_in_with_password(
+                            {
+                                "email": login_email.strip(),
+                                "password": login_password,
+                            }
+                        )
+                        handle_auth_response(response.session)
+
+                        if response.session:
+                            st.success("Login successful.")
+                            st.rerun()
+                        else:
+                            st.error(
+                                "Login did not return a session. "
+                                "If email confirmation is enabled, confirm "
+                                "your email first."
+                            )
+                    except Exception as exc:
+                        st.error(f"Login failed: {exc}")
+
+        with register_tab:
+            register_email = st.text_input("Email", key="register_email")
+            register_password = st.text_input(
+                "Password",
+                type="password",
+                key="register_password",
+            )
+            register_password_confirm = st.text_input(
+                "Confirm password",
+                type="password",
+                key="register_password_confirm",
+            )
+
+            if st.button("📝 Create Account", use_container_width=True):
+                if not register_email.strip():
+                    st.error("Enter your email.")
+                elif len(register_password) < 6:
+                    st.error("Password must contain at least 6 characters.")
+                elif register_password != register_password_confirm:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        response = supabase.auth.sign_up(
+                            {
+                                "email": register_email.strip(),
+                                "password": register_password,
+                            }
+                        )
+                        if response.session:
+                            handle_auth_response(response.session)
+                            st.success("Account created.")
+                            st.rerun()
+                        else:
+                            st.success(
+                                "Account created. Check your email and confirm "
+                                "your account before logging in."
+                            )
+                    except Exception as exc:
+                        st.error(f"Registration failed: {exc}")
+    else:
+        user = st.session_state.supabase_user
+        user_email = getattr(user, "email", None)
+
+        if user_email is None and isinstance(user, dict):
+            user_email = user.get("email")
+
+        st.success(f"Logged in as {user_email or 'authenticated user'}")
+
+        if st.button("🚪 Logout", use_container_width=True):
+            sign_out()
+            st.rerun()
+
+    st.divider()
+
     st.header("⚙️ Connection")
 
+    # Temporary compatibility with the current API-key backend.
     api_key_input = st.text_input(
         "API Key",
         value=st.session_state.api_key,
         type="password",
         placeholder="Enter your API key",
-        help="Your API key determines which workspace you can access.",
+        help=(
+            "Temporary compatibility with the current backend. "
+            "Supabase authentication is being added in stages."
+        ),
     )
 
     if api_key_input != st.session_state.api_key:
@@ -56,11 +240,12 @@ with st.sidebar:
 
     if st.session_state.api_key:
         st.success("API key configured.")
+    elif current_access_token():
+        st.info("Supabase session active.")
     else:
-        st.warning("Enter your API key to access your workspace.")
+        st.warning("Authentication is required to access the current backend.")
 
     st.divider()
-
 
 # -----------------------------
 # Header
@@ -97,9 +282,17 @@ with st.sidebar:
 
 
 def api_headers() -> dict[str, str]:
-    return {
-        "X-API-Key": st.session_state.api_key,
-    }
+    """Build backend authentication headers."""
+    headers: dict[str, str] = {}
+
+    token = current_access_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    if st.session_state.api_key:
+        headers["X-API-Key"] = st.session_state.api_key
+
+    return headers
 
 
 def show_api_error(response: requests.Response) -> None:
@@ -117,12 +310,16 @@ def show_api_error(response: requests.Response) -> None:
 
 
 def authentication_available() -> bool:
+    """Check that at least one supported authentication mechanism exists."""
+    if current_access_token():
+        return True
+
     if st.session_state.api_key:
         return True
 
     st.error(
         "Authentication required. "
-        "Enter your API key in the sidebar."
+        "Log in with Supabase or enter an API key in the sidebar."
     )
 
     return False

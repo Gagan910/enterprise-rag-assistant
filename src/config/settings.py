@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     api_keys: str | None = None
     groq_api_key: str | None = None
 
+    supabase_url: str | None = None
+    supabase_anon_key: str | None = None
+
     llm_provider: str = "gemini"
     llm_fallback_provider: str = "groq"
 
@@ -22,6 +25,9 @@ class Settings(BaseSettings):
 
     retrieval_top_k: int = Field(default=5, gt=0)
     rerank_top_k: int = Field(default=3, gt=0)
+
+    vector_store_path: str = "data/chroma"
+    vector_collection_name: str = "documents"
 
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
@@ -49,9 +55,6 @@ class Settings(BaseSettings):
             )
 
         return self
-
-    vector_store_path: str = "data/chroma"
-    vector_collection_name: str = "documents"
 
     model_config = SettingsConfigDict(
         env_file=".env",
