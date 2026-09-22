@@ -1,8 +1,27 @@
 # Enterprise Document Intelligence & RAG Assistant
 
-An end-to-end Retrieval-Augmented Generation (RAG) application for asking grounded questions over enterprise documents.
+An end-to-end, production-style Retrieval-Augmented Generation (RAG) application for asking grounded questions over enterprise documents.
 
-The system ingests PDF, DOCX, and TXT files, converts them into searchable chunks, retrieves relevant context using semantic search, reranks the results with a cross-encoder, and generates an answer with source citations. It also includes API authentication, multi-LLM fallback, DVC data versioning, MLflow retrieval evaluation, Docker, GitHub Actions CI, FastAPI deployment, and a Streamlit frontend.
+The system supports PDF, DOCX, and TXT documents, converts them into searchable chunks, retrieves relevant context with semantic search, reranks results with a cross-encoder, and generates grounded answers with source citations.
+
+It also includes:
+
+- Multi-user authentication with Supabase
+- User/workspace isolation
+- FastAPI backend
+- Streamlit frontend
+- Gemini primary LLM with Groq fallback
+- ChromaDB vector storage / Chroma Cloud production support
+- Cross-encoder reranking
+- Docker deployment
+- GitHub Actions CI
+- DVC data versioning
+- MLflow retrieval evaluation
+- DagsHub integration
+- Automated testing
+- Render deployment
+
+---
 
 ## Live Demo
 
@@ -13,96 +32,163 @@ The system ingests PDF, DOCX, and TXT files, converts them into searchable chunk
 - **GitHub:** https://github.com/Gagan910/enterprise-rag-assistant
 - **DagsHub:** https://dagshub.com/Gagan910/enterprise-rag-assistant
 
+> **Note:** The live application uses Supabase authentication. Each authenticated user is mapped to an isolated workspace so documents and queries are scoped to that user.
+
+---
+
 ## Architecture
 
 ```text
-                         ┌──────────────────────┐
-                         │   Streamlit Frontend │
-                         └──────────┬───────────┘
-                                    │ X-API-Key
-                                    ▼
-                         ┌──────────────────────┐
-                         │    FastAPI Backend   │
-                         └──────────┬───────────┘
-                                    │
-                  ┌─────────────────┴─────────────────┐
-                  │                                   │
-                  ▼                                   ▼
-        ┌──────────────────┐                ┌──────────────────┐
-        │ Document Upload  │                │      /query      │
-        └────────┬─────────┘                └────────┬─────────┘
-                 │                                   │
-                 ▼                                   ▼
-        Parse → Clean → Chunk                 Query Embedding
-                 │                                   │
-                 ▼                                   ▼
+                         ┌──────────────────────────┐
+                         │   Streamlit Frontend     │
+                         │  Login / Register / RAG   │
+                         └────────────┬─────────────┘
+                                      │
+                                      │ Supabase Auth
+                                      ▼
+                         ┌──────────────────────────┐
+                         │     Supabase Auth        │
+                         │   User Session / JWT     │
+                         └────────────┬─────────────┘
+                                      │
+                                      │ Bearer Token
+                                      ▼
+                         ┌──────────────────────────┐
+                         │      FastAPI Backend     │
+                         │ Authentication + RAG API │
+                         └────────────┬─────────────┘
+                                      │
+                    ┌─────────────────┴─────────────────┐
+                    │                                   │
+                    ▼                                   ▼
+          ┌──────────────────┐                ┌──────────────────┐
+          │ Document Upload  │                │      /query      │
+          └────────┬─────────┘                └────────┬─────────┘
+                   │                                   │
+                   ▼                                   ▼
+          Parse → Clean → Chunk                 Query Embedding
+                   │                                   │
+                   ▼                                   ▼
           Sentence Embeddings                 ChromaDB Search
-                 │                                   │
-                 ▼                                   ▼
-              ChromaDB                    Cross-Encoder Reranking
-                                                     │
-                                                     ▼
-                                           Grounded Prompt
-                                                     │
-                                  ┌──────────────────┴──────────────────┐
-                                  │                                     │
-                                  ▼                                     ▼
-                           Gemini (Primary)                    Groq (Fallback)
-                                  │                                     │
-                                  └──────────────────┬──────────────────┘
-                                                     ▼
-                                           Answer + Source Citations
+                   │                                   │
+                   ▼                                   ▼
+          Workspace-scoped                    Cross-Encoder
+          Vector Storage                      Reranking
+                                                       │
+                                                       ▼
+                                                Grounded Prompt
+                                                       │
+                                      ┌────────────────┴───────────────┐
+                                      │                                │
+                                      ▼                                ▼
+                              Gemini (Primary)                  Groq (Fallback)
+                                      │                                │
+                                      └────────────────┬───────────────┘
+                                                       ▼
+                                             Answer + Source Citations
 ```
+
+### Multi-user isolation
+
+```text
+User A
+  │
+  ├── Supabase account
+  ├── Workspace A
+  └── Documents A
+          │
+          └── Queries only retrieve Workspace A data
+
+
+User B
+  │
+  ├── Supabase account
+  ├── Workspace B
+  └── Documents B
+          │
+          └── Queries only retrieve Workspace B data
+```
+
+Workspace identifiers are derived from authenticated user identity, and document ingestion/retrieval applies workspace-scoped filtering.
+
+---
 
 ## RAG Pipeline
 
 ```text
 PDF / DOCX / TXT
-      ↓
+       ↓
 Document Parser
-      ↓
+       ↓
 Text Cleaning
-      ↓
+       ↓
 Chunking
-      ↓
+       ↓
 Sentence-Transformer Embeddings
-      ↓
-ChromaDB Vector Store
-      ↓
+       ↓
+Workspace-scoped Vector Storage
+       ↓
 Semantic Retrieval
-      ↓
+       ↓
 Cross-Encoder Reranking
-      ↓
+       ↓
 Grounded Prompt
-      ↓
+       ↓
 Gemini / Groq
-      ↓
+       ↓
 Answer + Sources
 ```
 
+---
+
 ## Key Features
 
+### Authentication & Multi-user Support
+
+- Supabase email/password authentication
+- User registration and login
+- Password-reset workflow
+- Bearer-token authentication between frontend and backend
+- User-specific workspace mapping
+- Workspace-scoped document ingestion
+- Workspace-scoped retrieval
+- Workspace-isolated document listing
+- Workspace-isolated document lookup
+- Workspace-isolated document deletion
+- Workspace-isolated RAG queries
+- Legacy API-key compatibility retained by the backend
+
+> Custom SMTP / custom-domain email delivery is intentionally not required for the current deployment. Supabase's built-in email service is currently used.
+
 ### Document Intelligence
+
 - PDF, DOCX, and TXT ingestion
-- Text cleaning and configurable chunking
+- Text cleaning
+- Configurable chunking
 - Deterministic content-based document IDs
 - Duplicate document detection
+- Workspace-aware duplicate detection
 - Document listing and pagination
 - Single-document lookup
 - Document deletion
 - Metadata-based document filtering
-- File type and upload-size validation
+- File-type validation
+- Upload-size validation
 
 ### Retrieval
+
 - `all-MiniLM-L6-v2` sentence embeddings
 - ChromaDB vector database
+- Chroma Cloud support for production
 - Semantic similarity retrieval
-- Cross-encoder reranking using `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- Cross-encoder reranking with `cross-encoder/ms-marco-MiniLM-L-6-v2`
 - Configurable retrieval and reranking parameters
 - Document-specific retrieval
+- Workspace-specific retrieval
 
 ### Generation
-- Gemini as the primary LLM
+
+- Google Gemini as the primary LLM
 - Groq as the fallback LLM
 - Provider attempt tracking
 - Fallback status exposed through the API
@@ -110,16 +196,21 @@ Answer + Sources
 - Source citations in generated answers
 - Gemini rate-limit cooldown handling
 
-### API Security
-- `X-API-Key` authentication
-- `/health` remains public
-- Document and query endpoints are protected
-- Invalid or missing API keys return `401`
-- API secrets are stored through environment variables / deployment secrets
-- Local Streamlit secrets are excluded from Git
+### API & Security
+
+- FastAPI backend
+- Supabase Bearer-token authentication
+- Legacy `X-API-Key` authentication compatibility
+- Public `/health` endpoint
+- Protected document and query endpoints
+- Workspace-level data isolation
+- Secrets loaded from environment variables / deployment secrets
+- Local Streamlit secrets excluded from Git
+- Production logs avoid exposing prompts, generated answers, API keys, or other secret values
 
 ### MLOps
-- DVC for dataset/versioned document tracking
+
+- DVC for document/data versioning
 - DagsHub as the DVC remote
 - MLflow retrieval evaluation
 - DagsHub MLflow tracking
@@ -128,26 +219,34 @@ Answer + Sources
 - Render deployment
 
 ### Frontend
+
 - Streamlit interface
-- Single-screen document management and Q&A workflow
-- Backend health indicator
+- Supabase Login / Register experience
+- Password recovery UI
+- Document management
+- Document upload and indexing
 - Document listing
-- Document upload
+- RAG question answering
+- Backend health check
 - Retrieval `top_k` control
 - Source display
 - LLM provider display
 - Fallback trail display
 
+---
+
 ## Tech Stack
 
 | Area | Technology |
 |---|---|
+| Language | Python 3.12 |
 | Backend | FastAPI |
 | API Server | Uvicorn |
-| Validation / Config | Pydantic v2 / Pydantic Settings |
+| Authentication | Supabase Auth |
+| Configuration | Pydantic v2 / Pydantic Settings |
 | Document Parsing | pypdf, python-docx |
 | Embeddings | Sentence Transformers |
-| Vector Database | ChromaDB |
+| Vector Database | ChromaDB / Chroma Cloud |
 | Reranking | Cross-Encoder |
 | Primary LLM | Google Gemini |
 | Fallback LLM | Groq |
@@ -159,7 +258,8 @@ Answer + Sources
 | Experiment Tracking | MLflow |
 | CI/CD | GitHub Actions |
 | Deployment | Render |
-| Language | Python 3.12 |
+
+---
 
 ## Project Structure
 
@@ -211,12 +311,14 @@ enterprise-rag-assistant/
 │   └── main.py
 │
 ├── tests/
-│   └── test_health.py
+│   └── ...
 │
 └── .github/
     └── workflows/
         └── ci.yml
 ```
+
+---
 
 ## Configuration
 
@@ -231,11 +333,15 @@ Important configuration values include:
 ```text
 GEMINI_API_KEY
 GROQ_API_KEY
+
 API_KEY
+API_KEYS
+
+SUPABASE_URL
+SUPABASE_ANON_KEY
 
 LLM_PROVIDER
 LLM_FALLBACK_PROVIDER
-
 LLM_MODEL
 GROQ_MODEL
 
@@ -244,14 +350,38 @@ RERANKER_MODEL
 
 CHUNK_SIZE
 CHUNK_OVERLAP
-
 RETRIEVAL_TOP_K
 RERANK_TOP_K
+
+VECTOR_STORE_PATH
+VECTOR_COLLECTION_NAME
+
+CHROMA_CLOUD_HOST
+CHROMA_CLOUD_API_KEY
+CHROMA_CLOUD_TENANT
+CHROMA_CLOUD_DATABASE
 
 MLFLOW_TRACKING_URI
 ```
 
-**Never commit `.env`, API keys, tokens, passwords, or Streamlit secrets.**
+### Secrets
+
+Never commit:
+
+```text
+.env
+.streamlit/secrets.toml
+API keys
+LLM credentials
+Supabase credentials
+Chroma Cloud credentials
+tokens
+passwords
+```
+
+Use environment variables or the deployment platform's secret/environment-variable configuration.
+
+---
 
 ## Local Backend Setup
 
@@ -264,7 +394,7 @@ cd enterprise-rag-assistant
 
 ### 2. Create the backend environment
 
-Windows:
+Windows PowerShell:
 
 ```powershell
 python -m venv .venv
@@ -279,7 +409,7 @@ pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Create a local `.env` file with the required secrets and configuration.
+Create a local `.env` file with the required configuration and secrets.
 
 Do not commit the file.
 
@@ -301,24 +431,26 @@ Swagger:
 http://127.0.0.1:8000/docs
 ```
 
+---
+
 ## Local Streamlit Frontend
 
-The frontend uses a separate environment because Streamlit and the backend use different Starlette compatibility requirements.
+The frontend uses a separate environment.
 
-### Create frontend environment
+### 1. Create the frontend environment
 
 ```powershell
 python -m venv .streamlit-venv
 .\.streamlit-venv\Scripts\Activate.ps1
 ```
 
-### Install frontend dependencies
+### 2. Install frontend dependencies
 
 ```powershell
 pip install -r requirements-frontend.txt
 ```
 
-### Configure local Streamlit secrets
+### 3. Configure local Streamlit secrets
 
 Create:
 
@@ -330,27 +462,31 @@ Example:
 
 ```toml
 RAG_API_URL = "http://127.0.0.1:8000"
-RAG_API_KEY = "your-api-key"
+
+SUPABASE_URL = "your-supabase-url"
+SUPABASE_ANON_KEY = "your-supabase-anon-key"
 ```
 
 The file is ignored by Git.
 
-### Start Streamlit
+### 4. Start Streamlit
 
 ```powershell
 streamlit run app.py
 ```
+
+---
 
 ## API Endpoints
 
 | Method | Endpoint | Authentication | Purpose |
 |---|---|---|---|
 | GET | `/health` | Public | Health check |
-| POST | `/documents/upload` | API key | Upload and index a document |
-| GET | `/documents` | API key | List indexed documents |
-| GET | `/documents/{document_id}` | API key | Get one document |
-| DELETE | `/documents/{document_id}` | API key | Delete a document |
-| POST | `/query` | API key | Query the RAG system |
+| POST | `/documents/upload` | Bearer / API key | Upload and index a document |
+| GET | `/documents` | Bearer / API key | List workspace documents |
+| GET | `/documents/{document_id}` | Bearer / API key | Get one workspace document |
+| DELETE | `/documents/{document_id}` | Bearer / API key | Delete a workspace document |
+| POST | `/query` | Bearer / API key | Query the RAG system |
 
 ### Query example
 
@@ -384,25 +520,28 @@ Response structure:
 
 If Gemini is unavailable and Groq handles the request, the response exposes the fallback trail through `provider`, `fallback_used`, and `provider_attempts`.
 
+---
+
 ## Testing
 
 The project has a comprehensive automated test suite covering:
 
 - API endpoints
-- authentication
-- document management
-- ingestion
-- parsing
-- cleaning
-- chunking
-- embeddings
-- vector storage
-- retrieval
-- reranking
+- Authentication
+- Multi-workspace isolation
+- Document management
+- Ingestion
+- Parsing
+- Cleaning
+- Chunking
+- Embeddings
+- Vector storage
+- Retrieval
+- Reranking
 - RAG generation
 - LLM fallback behavior
-- configuration validation
-- response validation
+- Configuration validation
+- Response validation
 
 Run:
 
@@ -410,13 +549,21 @@ Run:
 pytest -q
 ```
 
-The latest validated project state had **100/100 tests passing**.
+### Current validated state
+
+```text
+114 passed
+```
+
+The current backend test suite has been fully validated with **114/114 tests passing**.
+
+---
 
 ## Retrieval Evaluation
 
 Retrieval quality is evaluated with MLflow and tracked through DagsHub.
 
-Current verified evaluation metrics:
+### Verified evaluation metrics
 
 ```text
 Hit Rate: 1.0
@@ -443,6 +590,8 @@ Retrieval Top-K:
 5
 ```
 
+---
+
 ## DVC
 
 The project uses DVC to version document data.
@@ -467,6 +616,8 @@ The sample document is tracked through:
 data/sample.txt.dvc
 ```
 
+---
+
 ## MLflow
 
 MLflow tracking is configured with the DagsHub MLflow endpoint.
@@ -475,11 +626,13 @@ MLflow tracking is configured with the DagsHub MLflow endpoint.
 https://dagshub.com/Gagan910/enterprise-rag-assistant.mlflow
 ```
 
-The retrieval evaluation experiment is:
+Retrieval evaluation experiment:
 
 ```text
 enterprise-rag-retrieval-evaluation
 ```
+
+---
 
 ## Docker
 
@@ -498,7 +651,11 @@ docker run --rm -p 8000:8000 `
   enterprise-rag-assistant:latest
 ```
 
+For production, configure secrets through the deployment platform rather than placing real credentials directly in shell history or source files.
+
 The Docker image includes the embedding and reranker model assets required by the backend.
+
+---
 
 ## CI/CD
 
@@ -519,7 +676,7 @@ Workflow:
 .github/workflows/ci.yml
 ```
 
-The latest verified CI workflow is passing.
+---
 
 ## Deployment
 
@@ -531,12 +688,15 @@ The FastAPI backend is deployed on Render:
 https://enterprise-rag-assistant-ik30.onrender.com
 ```
 
-The production backend uses:
+Production backend capabilities include:
 
 - Render environment variables
-- API-key authentication
+- Supabase Bearer-token authentication
+- Legacy API-key compatibility
+- Workspace isolation
 - Dynamic `$PORT`
 - Docker-compatible model assets
+- Chroma Cloud support
 - Gemini → Groq fallback
 
 ### Frontend
@@ -547,76 +707,127 @@ The Streamlit frontend is deployed separately on Render:
 https://enterprise-rag-frontend-g1bm.onrender.com
 ```
 
-Production frontend configuration uses Render environment variables:
+Production frontend configuration uses Render environment variables for:
 
 ```text
 RAG_API_URL
-RAG_API_KEY
+SUPABASE_URL
+SUPABASE_ANON_KEY
+RAG_FRONTEND_URL
 ```
 
-The API key is never entered manually in the deployed UI.
+The deployed UI does not require users to manually enter an API key.
+
+---
 
 ## Security Considerations
 
+- Authentication is handled through Supabase Auth.
+- Backend requests are authenticated with Supabase Bearer tokens.
+- Workspace identifiers scope document and query operations.
+- Legacy API-key authentication remains available for compatibility.
 - Secrets are loaded from environment variables or Streamlit secrets.
 - `.env` and `.streamlit/secrets.toml` are ignored by Git.
-- Protected API endpoints require `X-API-Key`.
 - Health checks remain publicly accessible.
-- Production logs avoid printing prompts, generated answers, API keys, or other secret values.
-- API credentials should be rotated immediately if accidentally exposed.
+- Protected API endpoints require authentication.
+- Production logs avoid printing prompts, generated answers, API keys, tokens, or other secret values.
+- Never commit credentials to Git.
+- Rotate credentials immediately if they are accidentally exposed.
 
-## Example Workflow
+---
+
+## Example End-to-End Workflow
 
 ```text
-1. Upload enterprise document
-          ↓
-2. Validate file
-          ↓
-3. Parse document
-          ↓
-4. Clean text
-          ↓
-5. Split into chunks
-          ↓
-6. Generate embeddings
-          ↓
-7. Store in ChromaDB
-          ↓
-8. User asks a question
-          ↓
-9. Retrieve relevant chunks
-          ↓
-10. Rerank chunks
-          ↓
-11. Build grounded prompt
-          ↓
-12. Generate with Gemini
-          ↓
-13. Fall back to Groq if required
-          ↓
-14. Return answer + sources + provider trail
+1. User registers / logs in
+              ↓
+2. Supabase authenticates the user
+              ↓
+3. Backend maps the authenticated user to a workspace
+              ↓
+4. User uploads an enterprise document
+              ↓
+5. Validate file
+              ↓
+6. Parse document
+              ↓
+7. Clean text
+              ↓
+8. Split into chunks
+              ↓
+9. Generate embeddings
+              ↓
+10. Store workspace-scoped vectors
+              ↓
+11. User asks a question
+              ↓
+12. Generate query embedding
+              ↓
+13. Retrieve relevant workspace-scoped chunks
+              ↓
+14. Rerank chunks
+              ↓
+15. Build grounded prompt
+              ↓
+16. Generate with Gemini
+              ↓
+17. Fall back to Groq if required
+              ↓
+18. Return answer + sources + provider trail
 ```
+
+---
 
 ## Engineering Highlights
 
 This project demonstrates practical implementation of:
 
 - Production-style FastAPI API design
-- RAG architecture
+- Multi-user authentication
+- Workspace-level data isolation
+- Retrieval-Augmented Generation
 - Semantic retrieval
+- Sentence-transformer embeddings
 - Cross-encoder reranking
+- Grounded generation
 - Multi-LLM fallback
 - Centralized configuration
-- API authentication
 - Document lifecycle management
+- Duplicate detection
 - Automated testing
 - Dockerization
 - DVC data versioning
-- MLflow experiment tracking
+- MLflow retrieval evaluation
 - DagsHub integration
 - GitHub Actions CI
 - Cloud deployment
 - Streamlit frontend integration
+
+---
+
+## Project Status
+
+**Production-style portfolio project — deployed and operational.**
+
+Current validated state:
+
+```text
+Backend tests:       114/114 passing
+Frontend:            Deployed
+Backend:             Deployed
+Authentication:      Supabase
+Multi-user isolation: Enabled
+RAG pipeline:        Operational
+Vector storage:      ChromaDB / Chroma Cloud
+Primary LLM:         Gemini
+Fallback LLM:        Groq
+CI/CD:               GitHub Actions
+Deployment:          Render
+```
+
+Custom SMTP/domain email delivery is intentionally postponed; the current application uses Supabase's built-in authentication email service.
+
+---
 
 ## License
 
