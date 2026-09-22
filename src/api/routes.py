@@ -3,7 +3,16 @@ import time
 from hashlib import sha256
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+import requests
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
@@ -18,6 +27,7 @@ api_key_header = APIKeyHeader(
     name="X-API-Key",
     auto_error=False,
 )
+
 
 def _get_api_key_workspaces() -> dict[str, str]:
     """Build the API-key-to-workspace mapping from configuration."""
@@ -84,20 +94,120 @@ def _get_workspace_for_api_key(api_key: str | None) -> str:
     return workspaces[api_key]
 
 
-def require_api_key(
-    api_key: str | None = Depends(api_key_header),
-) -> None:
-    """Require a valid API key."""
+def _get_workspace_for_supabase_token(token: str) -> str:
+    """Validate a Supabase access token and map the user to a workspace."""
 
-    _get_workspace_for_api_key(api_key)
+    if not settings.supabase_url or not settings.supabase_anon_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase authentication is not configured.",
+        )
+
+    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/user"
+
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "apikey": settings.supabase_anon_key,
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to validate Supabase authentication.",
+        ) from exc
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired Supabase access token.",
+        )
+
+    try:
+        user = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Supabase authentication response.",
+        ) from exc
+
+    user_id = user.get("id")
+
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Supabase user identity is missing.",
+        )
+
+    return f"user-{user_id}"
 
 
 def get_workspace_id(
     api_key: str | None = Depends(api_key_header),
+    authorization: str | None = Header(default=None),
 ) -> str:
-    """Return the workspace associated with the authenticated API key."""
+    """
+    Return the workspace associated with either a Supabase session
+    or a legacy API key.
+    """
+
+    token = _extract_bearer_token(authorization)
+
+    if token:
+        return _get_workspace_for_supabase_token(token)
 
     return _get_workspace_for_api_key(api_key)
+
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    """
+    Extract a Bearer token from the Authorization header.
+
+    FastAPI injects a string at runtime. The isinstance() check is
+    important because the function is also called directly by unit tests,
+    where the default Header(...) object may be passed through.
+    """
+    if not isinstance(authorization, str):
+        return None
+
+    scheme, _, token = authorization.partition(" ")
+
+    if scheme.lower() != "bearer":
+        return None
+
+    token = token.strip()
+    return token or None
+
+
+def require_api_key(
+    api_key: str | None = Depends(api_key_header),
+    authorization: str | None = Header(default=None),
+) -> None:
+    """
+    Validate either a Supabase Bearer token or a legacy API key.
+    """
+
+    token = _extract_bearer_token(authorization)
+
+    if token:
+        _get_workspace_for_supabase_token(token)
+        return
+
+    _get_workspace_for_api_key(api_key)
+
+
+def require_authentication(
+    workspace_id: str = Depends(get_workspace_id),
+) -> None:
+    """Require either a valid Supabase session or a legacy API key."""
+
+    return None
+
+
+
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
@@ -232,7 +342,7 @@ MAX_UPLOAD_SIZE = 10 * 1024 * 1024
 @router.post(
     "/documents/upload",
     response_model=DocumentInfo,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_authentication)],
 )
 async def upload_document(
     file: UploadFile = File(...),
@@ -335,7 +445,7 @@ async def upload_document(
 @router.get(
     "/documents",
     response_model=list[DocumentInfo],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_authentication)],
 )
 def list_documents(
     skip: int = Query(default=0, ge=0),
@@ -379,7 +489,7 @@ def list_documents(
 @router.get(
     "/documents/{document_id}",
     response_model=DocumentInfo,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_authentication)],
 )
 def get_document(
     document_id: str,
@@ -425,7 +535,7 @@ def get_document(
 
 @router.delete(
     "/documents/{document_id}",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_authentication)],
 )
 def delete_document(
     document_id: str,
@@ -474,7 +584,7 @@ def health_check() -> dict[str, str]:
 @router.post(
     "/query",
     response_model=QueryResponse,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_authentication)],
 )
 async def query(
     request: QueryRequest,
