@@ -149,52 +149,32 @@ def get_workspace_id(
     api_key: str | None = Depends(api_key_header),
     authorization: str | None = Header(default=None),
 ) -> str:
-    """
-    Return the workspace associated with either a Supabase session
-    or a legacy API key.
-    """
+    """Return the workspace for a Supabase session or legacy API key."""
 
-    token = _extract_bearer_token(authorization)
+    # FastAPI injects a Header value when this function is used as a dependency.
+    # Tests and other direct callers may omit the argument, in which case the
+    # default Header object must not be treated as an actual header string.
+    if not isinstance(authorization, str):
+        authorization = None
 
-    if token:
-        return _get_workspace_for_supabase_token(token)
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+
+        if scheme.lower() == "bearer" and token.strip():
+            return _get_workspace_for_supabase_token(token.strip())
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Authorization header.",
+        )
 
     return _get_workspace_for_api_key(api_key)
 
 
-def _extract_bearer_token(authorization: str | None) -> str | None:
-    """
-    Extract a Bearer token from the Authorization header.
-
-    FastAPI injects a string at runtime. The isinstance() check is
-    important because the function is also called directly by unit tests,
-    where the default Header(...) object may be passed through.
-    """
-    if not isinstance(authorization, str):
-        return None
-
-    scheme, _, token = authorization.partition(" ")
-
-    if scheme.lower() != "bearer":
-        return None
-
-    token = token.strip()
-    return token or None
-
-
 def require_api_key(
     api_key: str | None = Depends(api_key_header),
-    authorization: str | None = Header(default=None),
 ) -> None:
-    """
-    Validate either a Supabase Bearer token or a legacy API key.
-    """
-
-    token = _extract_bearer_token(authorization)
-
-    if token:
-        _get_workspace_for_supabase_token(token)
-        return
+    """Legacy compatibility dependency for API-key-only callers/tests."""
 
     _get_workspace_for_api_key(api_key)
 
