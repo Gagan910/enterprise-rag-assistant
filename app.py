@@ -873,8 +873,8 @@ with main_col:
             and len(provider_attempts) >= 2
         ):
             st.info(
-                f"{provider_attempts[0].title()} unavailable â†’ "
-                f"{provider_attempts[1].title()} fallback â†’ "
+                f"{provider_attempts[0].title()} unavailable -> "
+                f"{provider_attempts[1].title()} fallback -> "
                 f"Answer generated"
             )
 
@@ -910,7 +910,7 @@ with main_col:
                 start=1,
             ):
                 st.markdown(
-                    f"**Source {index}** â€” "
+                    f"**Source {index}** - "
                     f"{source.get('source', 'Unknown')} "
                     f"(chunk "
                     f"{source.get('chunk_id', 'Unknown')})"
