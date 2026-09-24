@@ -521,6 +521,10 @@ st.caption("AI-powered document search, retrieval, and grounded answers.")
 # Backend status
 # -----------------------------
 
+# -----------------------------
+# Backend status
+# -----------------------------
+
 with st.sidebar:
     if st.button(
         "Check Backend",
@@ -529,18 +533,22 @@ with st.sidebar:
         try:
             response = requests.get(
                 f"{api_url}/health",
-                timeout=15,
+                timeout=5,
             )
 
             if response.ok:
                 st.success("Backend is healthy.")
             else:
-                st.error(
-                    f"Health check failed: {response.status_code}"
+                st.info(
+                    "Backend is waking up. "
+                    "Please try again in a few seconds."
                 )
 
-        except requests.RequestException as exc:
-            st.error(f"Connection failed: {exc}")
+        except requests.RequestException:
+            st.info(
+                "Backend is waking up. "
+                "Please try again in a few seconds."
+            )
 
 
 def api_headers() -> dict[str, str]:
