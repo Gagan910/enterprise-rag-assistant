@@ -283,41 +283,54 @@ def render_auth_page() -> None:
                         st.error(f"Login failed: {exc}")
 
             st.divider()
-            st.caption("Forgot your password?")
-
-            forgot_email = st.text_input(
-                "Account email",
-                key="forgot_email",
-                placeholder="you@example.com",
-            )
 
             if st.button(
-                "Send reset email",
+                "Forgot password?",
                 use_container_width=True,
-                key="forgot_password_button",
+                key="show_forgot_password_button",
             ):
-                email = forgot_email.strip()
+                st.session_state.show_forgot_password = True
 
-                if not email:
-                    st.warning("Enter the email address for your account.")
-                else:
-                    try:
-                        with st.spinner("Sending password reset email..."):
-                            supabase.auth.reset_password_for_email(
-                                email,
-                                {
-                                    "redirect_to": (
-                                        f"{FRONTEND_URL}/?mode=recovery"
-                                    )
-                                },
+            if st.session_state.get("show_forgot_password", False):
+                st.caption("Enter your account email to receive a password reset link.")
+
+                forgot_email = st.text_input(
+                    "Account email",
+                    key="forgot_email",
+                    placeholder="you@example.com",
+                )
+
+                if st.button(
+                    "Send reset link",
+                    use_container_width=True,
+                    key="forgot_password_button",
+                ):
+                    email = forgot_email.strip()
+
+                    if not email:
+                        st.warning("Enter the email address for your account.")
+                    else:
+                        try:
+                            with st.spinner("Sending password reset email..."):
+                                supabase.auth.reset_password_for_email(
+                                    email,
+                                    {
+                                        "redirect_to": (
+                                            f"{FRONTEND_URL}/?mode=recovery"
+                                        )
+                                    },
+                                )
+
+                            st.success(
+                                "If an account exists for that email, "
+                                "a password reset link has been sent. "
+                                "Check your inbox."
                             )
 
-                        st.success(
-                            "If an account exists for that email, a password "
-                            "reset link has been sent. Check your inbox."
-                        )
-                    except Exception as exc:
-                        st.error(f"Could not send reset email: {exc}")
+                        except Exception as exc:
+                            st.error(
+                                f"Could not send reset email: {exc}"
+                            )
 
         with register_tab:
             st.subheader("Create your account")
