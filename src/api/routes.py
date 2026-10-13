@@ -649,7 +649,10 @@ async def query(
             answer=answer,
             sources=sources,
             provider=provider,
-            fallback_used=provider == settings.llm_fallback_provider,
+            fallback_used=(
+                provider is not None
+                and provider != settings.llm_provider
+            ),
             provider_attempts=provider_attempts,
         )
 

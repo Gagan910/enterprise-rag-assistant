@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
 
-    llm_provider: str = "gemini"
-    llm_fallback_provider: str = "groq"
+    llm_provider: str = "groq"
+    llm_fallback_provider: str = "gemini"
 
     llm_model: str = "gemini-3.7-flash"
     groq_model: str = "llama-3.3-70b-versatile"

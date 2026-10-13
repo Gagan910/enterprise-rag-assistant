@@ -4,7 +4,14 @@ import time
 import httpx
 from google import genai
 from google.genai.errors import ClientError, ServerError
-from groq import Groq
+from groq import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    Groq,
+    InternalServerError,
+    RateLimitError,
+)
 from tenacity import (
     retry,
     retry_if_exception,
@@ -48,8 +55,33 @@ def _is_retryable_gemini_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_retryable_groq_error(exc: BaseException) -> bool:
+    """Return True only for transient Groq API failures."""
+
+    if isinstance(
+        exc,
+        (
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+            httpx.TimeoutException,
+            httpx.TransportError,
+        ),
+    ):
+        return True
+
+    if isinstance(exc, APIStatusError):
+        status_code = getattr(exc, "status_code", None)
+        return status_code == 429 or (
+            status_code is not None and status_code >= 500
+        )
+
+    return False
+
+
 class LLMClient:
-    """LLM client with Gemini primary and Groq fallback."""
+    """LLM client with configurable primary and fallback providers."""
 
     def __init__(self):
         self.primary_provider = settings.llm_provider
@@ -107,8 +139,9 @@ class LLMClient:
 
         return response.choices[0].message.content or ""
 
+
     def generate(self, prompt: str) -> str:
-        """Generate a response using the primary provider with fallback."""
+        """Generate using the primary provider, falling back on transient failures."""
 
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
@@ -119,110 +152,72 @@ class LLMClient:
         self.provider_used = None
         self.provider_attempts = []
 
-        gemini_in_cooldown = (
-            time.monotonic() < self._gemini_cooldown_until
-        )
+        providers = [self.primary_provider, self.fallback_provider]
+        last_error = None
 
-        if (
-            self.primary_provider == "gemini"
-            and gemini_in_cooldown
-            and self.fallback_provider == "groq"
-        ):
-            logger.info(
-                "Gemini cooldown active. Skipping Gemini and using Groq."
-            )
+        for provider in providers:
+            if (
+                provider == "gemini"
+                and time.monotonic() < self._gemini_cooldown_until
+            ):
+                logger.info("Gemini cooldown active; skipping Gemini.")
+                continue
 
-            self.provider_attempts.append("groq")
+            if provider not in {"gemini", "groq"}:
+                raise LLMUnavailableError(
+                    f"Unsupported provider: {provider}"
+                )
+
+            self.provider_attempts.append(provider)
 
             try:
-                answer = self._generate_with_groq(prompt)
-                self.provider_used = "groq"
+                if provider == "groq":
+                    logger.info(
+                        "Generating response with Groq model=%s",
+                        settings.groq_model,
+                    )
+                    answer = self._generate_with_groq(prompt)
+                else:
+                    logger.info(
+                        "Generating response with Gemini model=%s",
+                        self.model_name,
+                    )
+                    answer = self._generate_with_gemini(prompt)
 
+                self.provider_used = provider
                 return answer
 
             except Exception as exc:
-                logger.error(
-                    "Fallback LLM unavailable provider=groq error=%s",
-                    type(exc).__name__,
-                )
+                # Determine whether this is a recognized availability failure.
+                if provider == "groq":
+                    is_transient = _is_retryable_groq_error(exc)
+                else:
+                    is_transient = _is_retryable_gemini_error(exc)
 
-                raise LLMUnavailableError(
-                    "All configured LLM providers are unavailable."
-                ) from exc
+                    # Gemini quota errors should trigger fallback.
+                    is_quota_error = (
+                        isinstance(exc, ClientError)
+                        and getattr(exc, "code", None) == 429
+                    )
+                    is_transient = is_transient or is_quota_error
 
-        if self.primary_provider == "gemini":
-            self.provider_attempts.append("gemini")
+                    if is_transient:
+                        self._gemini_cooldown_until = (
+                            time.monotonic()
+                            + self._gemini_cooldown_seconds
+                        )
 
-            try:
-                logger.info(
-                    "Generating response with Gemini model=%s",
-                    self.model_name,
-                )
-
-                answer = self._generate_with_gemini(prompt)
-                self.provider_used = "gemini"
-
-                return answer
-
-            except (
-                httpx.ReadTimeout,
-                ConnectionError,
-                ServerError,
-            ) as exc:
-                logger.warning(
-                    "Primary LLM unavailable provider=gemini error=%s",
-                    type(exc).__name__,
-                )
-
-                if self.fallback_provider != "groq":
-                    raise LLMUnavailableError(
-                        "Primary LLM provider is unavailable."
-                    ) from exc
-
-            except ClientError as exc:
-                if getattr(exc, "code", None) != 429:
+                if not is_transient:
+                    # Do not hide programming errors or permanent client errors.
                     raise
 
-                self._gemini_cooldown_until = (
-                    time.monotonic() + self._gemini_cooldown_seconds
-                )
-
+                last_error = exc
                 logger.warning(
-                    "Primary LLM quota exhausted provider=gemini error=%s",
+                    "Transient LLM provider failure provider=%s error=%s",
+                    provider,
                     type(exc).__name__,
                 )
-
-                if self.fallback_provider != "groq":
-                    raise LLMUnavailableError(
-                        "Primary LLM provider quota is exhausted."
-                    ) from exc
-
-        if self.fallback_provider == "groq":
-            self.provider_attempts.append("groq")
-
-            logger.info(
-                "Falling back to Groq model=%s",
-                settings.groq_model,
-            )
-
-            try:
-                answer = self._generate_with_groq(prompt)
-                self.provider_used = "groq"
-
-                return answer
-
-            except Exception as exc:
-                logger.error(
-                    "Fallback LLM unavailable provider=groq error=%s",
-                    type(exc).__name__,
-                )
-
-                raise LLMUnavailableError(
-                    "All configured LLM providers are unavailable."
-                ) from exc
 
         raise LLMUnavailableError(
-            f"No supported LLM provider configured: "
-            f"primary={self.primary_provider}, "
-            f"fallback={self.fallback_provider}"
-        )
+            "All configured LLM providers are unavailable."
+        ) from last_error
