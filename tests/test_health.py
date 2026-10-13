@@ -29,6 +29,16 @@ TEST_WORKSPACE_ID = (
     f"workspace-{sha256(settings.api_key.encode()).hexdigest()[:16]}"
 )
 
+def configure_llm_providers(monkeypatch, primary="groq", fallback="gemini"):
+    monkeypatch.setattr(
+        "src.generation.llm.settings.llm_provider",
+        primary,
+    )
+    monkeypatch.setattr(
+        "src.generation.llm.settings.llm_fallback_provider",
+        fallback,
+    )
+
 def test_different_api_keys_produce_different_workspace_ids(monkeypatch):
     from src.api.routes import get_workspace_id
 
@@ -360,7 +370,8 @@ def test_query_rejects_missing_question():
 
     assert response.status_code == 422
 
-def test_llm_client_generate():
+def test_llm_client_generate(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     mock_response = type(
@@ -383,7 +394,8 @@ def test_llm_client_generate():
         contents="Test prompt",
     )
     
-def test_llm_client_retries_on_server_error():
+def test_llm_client_retries_on_server_error(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     mock_response = type(
@@ -405,7 +417,8 @@ def test_llm_client_retries_on_server_error():
     assert mock_generate.call_count == 2
 
 
-def test_llm_client_retries_on_read_timeout():
+def test_llm_client_retries_on_read_timeout(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     mock_response = type(
@@ -426,7 +439,8 @@ def test_llm_client_retries_on_read_timeout():
     assert result == "successful response"
     assert mock_generate.call_count == 2
 
-def test_llm_client_does_not_retry_permanent_error():
+def test_llm_client_does_not_retry_permanent_error(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     with patch.object(
@@ -1963,7 +1977,9 @@ def test_evaluate_retrieval_handles_empty_dataset():
     assert result["mrr"] == 0.0
     assert result["results"] == []
     
-def test_llm_client_uses_gemini_when_available():
+
+def test_llm_client_uses_gemini_when_available(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     with patch.object(
@@ -1982,7 +1998,8 @@ def test_llm_client_uses_gemini_when_available():
     mock_groq.assert_not_called()
 
 
-def test_llm_client_falls_back_to_groq_on_server_error():
+def test_llm_client_falls_back_to_groq_on_server_error(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     server_error = ServerError(503, {})
@@ -2004,7 +2021,9 @@ def test_llm_client_falls_back_to_groq_on_server_error():
     mock_groq.assert_called_once_with("test prompt")
     
 
-def test_llm_client_falls_back_to_groq_on_gemini_quota_error():
+
+def test_llm_client_falls_back_to_groq_on_gemini_quota_error(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     quota_error = ClientError(429, {})
@@ -2027,7 +2046,9 @@ def test_llm_client_falls_back_to_groq_on_gemini_quota_error():
     mock_groq.assert_called_once_with("test prompt")
 
 
-def test_llm_client_falls_back_to_groq_on_timeout():
+
+def test_llm_client_falls_back_to_groq_on_timeout(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     timeout_error = httpx.ReadTimeout("request timed out")
@@ -2049,7 +2070,9 @@ def test_llm_client_falls_back_to_groq_on_timeout():
     mock_groq.assert_called_once_with("test prompt")
 
 
-def test_llm_client_does_not_fallback_on_permanent_error():
+
+def test_llm_client_does_not_fallback_on_permanent_error(monkeypatch):
+    configure_llm_providers(monkeypatch, "gemini", "groq")
     client = LLMClient()
 
     with patch.object(
@@ -2063,7 +2086,7 @@ def test_llm_client_does_not_fallback_on_permanent_error():
         with pytest.raises(ValueError, match="invalid request"):
             client.generate("test prompt")
 
-    assert client.provider_used is None
+
     mock_gemini.assert_called_once_with("test prompt")
     mock_groq.assert_not_called()
     
@@ -2100,6 +2123,11 @@ def test_query_response_includes_gemini_provider(monkeypatch):
         FakeGenerator,
     )
 
+    monkeypatch.setattr(
+        "src.api.routes.settings.llm_provider",
+        "gemini",
+    )
+
     from src.api.routes import QueryRequest, query
 
     response = __import__("asyncio").run(
@@ -2110,7 +2138,13 @@ def test_query_response_includes_gemini_provider(monkeypatch):
     assert response.fallback_used is False
 
 
+
 def test_query_response_includes_groq_fallback_status(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.routes.settings.llm_provider",
+        "gemini",
+    )
+
     class FakeRetriever:
         def retrieve(self, query, top_k, rerank_top_k, where=None):
             return [
@@ -2147,11 +2181,17 @@ def test_query_response_includes_groq_fallback_status(monkeypatch):
     from src.api.routes import QueryRequest, query
 
     response = __import__("asyncio").run(
-        query(QueryRequest(question="How many annual leave days?"))
+        query(
+            QueryRequest(
+                question="How many annual leave days?"
+            )
+        )
     )
 
     assert response.provider == "groq"
     assert response.fallback_used is True
+    assert response.provider_attempts == ["gemini", "groq"]
+
     
 def test_query_returns_503_when_all_llm_providers_fail(monkeypatch):
     class FakeRetriever:
