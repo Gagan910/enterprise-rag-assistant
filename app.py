@@ -35,12 +35,13 @@ if not api_url:
 api_url = api_url.rstrip("/")
 
 def check_backend_health() -> str:
-    """Check backend availability and trigger a Render cold start if needed."""
+    """Check backend availability and trigger a Render cold start."""
     try:
-        response = requests.get(f"{api_url}/health", timeout=3)
-        if response.ok:
-            return "healthy"
-        return "waking"
+        response = requests.get(
+            f"{api_url}/health",
+            timeout=3,
+        )
+        return "healthy" if response.ok else "waking"
     except requests.RequestException:
         return "waking"
 
@@ -48,6 +49,20 @@ def check_backend_health() -> str:
 if "backend_health_status" not in st.session_state:
     st.session_state.backend_health_status = check_backend_health()
 
+
+@st.fragment(run_every=5)
+def render_backend_status() -> None:
+    """Refresh backend status independently of the main app."""
+    if st.session_state.backend_health_status != "healthy":
+        st.session_state.backend_health_status = check_backend_health()
+
+    if st.session_state.backend_health_status == "healthy":
+        st.success("Backend connected.")
+    else:
+        st.info(
+            "Waking up the backend. "
+            "The first request may take a little longer."
+        )
 
 # -----------------------------
 # Supabase configuration
@@ -235,13 +250,7 @@ def render_auth_page() -> None:
     st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
     st.title("Enterprise RAG Assistant")
 
-    if st.session_state.backend_health_status == "healthy":
-        st.success("Backend connected.")
-    else:
-        st.info(
-            "Waking up the backend. "
-            "The first request may take a little longer."
-        )
+    render_backend_status()
 
     st.markdown(
         '<div class="auth-subtitle">'
