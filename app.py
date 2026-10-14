@@ -1,5 +1,6 @@
 import os
 
+import uuid
 import requests
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
@@ -33,6 +34,20 @@ if not api_url:
 
 api_url = api_url.rstrip("/")
 
+def check_backend_health() -> str:
+    """Check backend availability and trigger a Render cold start if needed."""
+    try:
+        response = requests.get(f"{api_url}/health", timeout=3)
+        if response.ok:
+            return "healthy"
+        return "waking"
+    except requests.RequestException:
+        return "waking"
+
+
+if "backend_health_status" not in st.session_state:
+    st.session_state.backend_health_status = check_backend_health()
+
 
 # -----------------------------
 # Supabase configuration
@@ -58,9 +73,10 @@ FRONTEND_URL = get_secret(
 ).rstrip("/")
 
 
+
 @st.cache_resource
-def get_supabase_client() -> Client | None:
-    """Create the Supabase client when configuration is available."""
+def get_supabase_client(session_id: str) -> Client | None:
+    """Create a Supabase client isolated to one Streamlit session."""
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return None
 
@@ -70,8 +86,11 @@ def get_supabase_client() -> Client | None:
         options=ClientOptions(flow_type="pkce"),
     )
 
+# Give each Streamlit session its own cached authentication client.
+if "supabase_client_id" not in st.session_state:
+    st.session_state.supabase_client_id = str(uuid.uuid4())
 
-supabase = get_supabase_client()
+supabase = get_supabase_client(st.session_state.supabase_client_id)
 
 
 # -----------------------------
@@ -215,6 +234,15 @@ def render_auth_page() -> None:
 
     st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
     st.title("Enterprise RAG Assistant")
+
+    if st.session_state.backend_health_status == "healthy":
+        st.success("Backend connected.")
+    else:
+        st.info(
+            "Waking up the backend. "
+            "The first request may take a little longer."
+        )
+
     st.markdown(
         '<div class="auth-subtitle">'
         "Sign in to securely access your documents and AI assistant."
@@ -704,31 +732,43 @@ with left_col:
 
     st.subheader("Upload")
 
-    uploaded_file = st.file_uploader(
-        "Upload PDF, DOCX, or TXT",
+
+    uploaded_files = st.file_uploader(
+        "Upload PDF, DOCX, or TXT files",
         type=["pdf", "docx", "txt"],
-        help="Maximum file size: 10 MB.",
+        accept_multiple_files=True,
+        help="Select multiple files at once. Maximum file size: 10 MB per file.",
     )
 
     if st.button(
         "📥 Upload & Index",
         type="primary",
         use_container_width=True,
-        disabled=uploaded_file is None,
+        disabled=not uploaded_files,
     ):
         if authentication_available():
-            try:
-                files = {
-                    "file": (
-                        uploaded_file.name,
-                        uploaded_file.getvalue(),
-                        uploaded_file.type,
-                    )
-                }
+            successful_uploads = 0
+            failed_uploads = 0
 
-                with st.spinner(
-                    "Uploading and indexing..."
-                ):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for index, uploaded_file in enumerate(uploaded_files):
+                status_text.info(
+                    f"Uploading {index + 1}/{len(uploaded_files)}: "
+                    f"{uploaded_file.name}"
+                )
+
+                try:
+                    files = {
+                        "file": (
+                            uploaded_file.name,
+                            uploaded_file.getvalue(),
+                            uploaded_file.type or "application/octet-stream",
+                        )
+                    }
+
+
                     response = requests.post(
                         f"{api_url}/documents/upload",
                         headers=api_headers(),
@@ -736,35 +776,45 @@ with left_col:
                         timeout=180,
                     )
 
-                if response.ok:
-                    data = response.json()
+                    if response.ok:
+                        data = response.json()
+                        successful_uploads += 1
 
-                    st.success(
-                        "Document indexed successfully."
+                        st.success(
+                            f"Indexed: {data.get('source', uploaded_file.name)} "
+                            f"({data.get('chunk_count', 0)} chunks)"
+                        )
+                    else:
+                        failed_uploads += 1
+                        st.error(
+                            f"Failed: {uploaded_file.name} "
+                            f"(HTTP {response.status_code})"
+                        )
+
+                except requests.RequestException as exc:
+                    failed_uploads += 1
+                    st.error(
+                        f"Connection error for {uploaded_file.name}: {exc}"
                     )
 
-                    st.write(
-                        f"**Source:** "
-                        f"{data.get('source', 'Unknown')}"
-                    )
+                progress_bar.progress((index + 1) / len(uploaded_files))
 
-                    st.caption(
-                        f"Chunks: "
-                        f"{data.get('chunk_count', 0)}"
-                    )
+            status_text.empty()
+            st.session_state.pop("documents", None)
 
-                    st.session_state.pop(
-                        "documents",
-                        None,
-                    )
-
-                else:
-                    show_api_error(response)
-
-            except requests.RequestException as exc:
-                st.error(
-                    f"Connection failed: {exc}"
+            if failed_uploads == 0:
+                st.success(
+                    f"Batch complete: {successful_uploads} file(s) "
+                    "uploaded and indexed successfully."
                 )
+            else:
+                st.warning(
+                    f"Batch complete: {successful_uploads} succeeded, "
+                    f"{failed_uploads} failed. Retry only the failed files."
+                )
+
+            st.info("Click Refresh Documents to update the indexed document list.")
+
 
 
 # ============================================================
