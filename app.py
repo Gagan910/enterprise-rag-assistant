@@ -3,6 +3,7 @@ import os
 import uuid
 import requests
 import streamlit as st
+import extra_streamlit_components as stx
 from streamlit.errors import StreamlitSecretNotFoundError
 from supabase import Client, ClientOptions, create_client
 
@@ -108,9 +109,15 @@ if "supabase_client_id" not in st.session_state:
 supabase = get_supabase_client(st.session_state.supabase_client_id)
 
 
+
 # -----------------------------
 # Authentication
 # -----------------------------
+
+SESSION_COOKIE_NAME = "rag_session"
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+cookie_manager = stx.CookieManager(key="rag_cookie_manager")
 
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
@@ -121,48 +128,186 @@ if "supabase_session" not in st.session_state:
 if "supabase_user" not in st.session_state:
     st.session_state.supabase_user = None
 
+if "rag_session_id" not in st.session_state:
+    st.session_state.rag_session_id = ""
+
+if "session_restore_attempted" not in st.session_state:
+    st.session_state.session_restore_attempted = False
+
 if "password_reset_mode" not in st.session_state:
     st.session_state.password_reset_mode = False
 
 
+def _session_value(session, name: str) -> str:
+    """Read a token from either a Supabase session object or dictionary."""
+    if isinstance(session, dict):
+        value = session.get(name, "")
+    else:
+        value = getattr(session, name, "")
+
+    return value if isinstance(value, str) else ""
+
+
 def current_access_token() -> str:
     """Return the current Supabase access token, if available."""
-    session = st.session_state.get("supabase_session")
+    return _session_value(
+        st.session_state.get("supabase_session"),
+        "access_token",
+    )
 
-    if not session:
-        return ""
 
-    if isinstance(session, dict):
-        return session.get("access_token", "")
-
-    return getattr(session, "access_token", "") or ""
+def _session_request_headers() -> dict[str, str]:
+    """Headers required by the backend session-management endpoints."""
+    return {
+        "Origin": FRONTEND_URL,
+        "Content-Type": "application/json",
+    }
 
 
 def handle_auth_response(session) -> None:
-    """Store a Supabase authentication session in Streamlit state."""
+    """Create a persistent backend session after Supabase authentication."""
     if session is None:
         return
 
+    access_token = _session_value(session, "access_token")
+    refresh_token = _session_value(session, "refresh_token")
+
+    if not access_token or not refresh_token:
+        raise RuntimeError(
+            "Supabase did not return both session tokens."
+        )
+
+    response = requests.post(
+        f"{api_url}/auth/session",
+        headers=_session_request_headers(),
+        json={
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        },
+        timeout=20,
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            "Could not establish a persistent backend session "
+            f"(HTTP {response.status_code})."
+        )
+
+    payload = response.json()
+    session_id = payload.get("session_id")
+
+    if not isinstance(session_id, str) or not session_id:
+        raise RuntimeError("The backend returned no valid session ID.")
+
+    cookie_manager.set(
+        SESSION_COOKIE_NAME,
+        session_id,
+        path="/",
+        max_age=SESSION_MAX_AGE_SECONDS,
+        secure=True,
+        same_site="lax",
+    )
+
+    st.session_state.rag_session_id = session_id
     st.session_state.supabase_session = session
 
     user = getattr(session, "user", None)
-
     if user is None and isinstance(session, dict):
         user = session.get("user")
 
-    st.session_state.supabase_user = user
+    st.session_state.supabase_user = (
+        payload.get("user") or user
+    )
+    st.session_state.session_restore_attempted = True
+
+
+def restore_persistent_session() -> None:
+    """Restore the backend session from the browser's persistent cookie."""
+    if st.session_state.get("rag_session_id"):
+        return
+
+    session_id = cookie_manager.get(SESSION_COOKIE_NAME)
+
+    # The cookie component can initially return None while it loads.
+    # Do not mark restoration complete until a cookie value is available.
+    if session_id is None:
+        return
+
+    if not isinstance(session_id, str) or not session_id:
+        st.session_state.session_restore_attempted = True
+        return
+
+    st.session_state.rag_session_id = session_id
+
+    try:
+        response = requests.get(
+            f"{api_url}/auth/session",
+            headers={
+                **_session_request_headers(),
+                "X-RAG-Session": session_id,
+            },
+            timeout=15,
+        )
+    except requests.RequestException:
+        # Preserve the cookie when the backend is temporarily unavailable.
+        # A later rerun can retry restoration.
+        st.session_state.rag_session_id = ""
+        return
+
+    if response.status_code == 401:
+        cookie_manager.delete(SESSION_COOKIE_NAME)
+        st.session_state.rag_session_id = ""
+        st.session_state.supabase_user = None
+        st.session_state.session_restore_attempted = True
+        return
+
+    if not response.ok:
+        st.session_state.rag_session_id = ""
+        return
+
+    try:
+        payload = response.json()
+    except ValueError:
+        st.session_state.rag_session_id = ""
+        return
+
+    st.session_state.supabase_user = payload.get("user")
+    st.session_state.session_restore_attempted = True
 
 
 def sign_out() -> None:
-    """Sign out and clear the local authentication state."""
+    """Revoke the persistent backend session and clear local authentication."""
+    session_id = st.session_state.get("rag_session_id", "")
+
+    if session_id:
+        try:
+            requests.delete(
+                f"{api_url}/auth/session",
+                headers={
+                    **_session_request_headers(),
+                    "X-RAG-Session": session_id,
+                },
+                timeout=10,
+            )
+        except requests.RequestException:
+            # Local logout still proceeds if the backend is unavailable.
+            pass
+
     if supabase is not None:
         try:
             supabase.auth.sign_out()
         except Exception:
             pass
 
+    try:
+        cookie_manager.delete(SESSION_COOKIE_NAME)
+    except Exception:
+        pass
+
     st.session_state.supabase_session = None
     st.session_state.supabase_user = None
+    st.session_state.rag_session_id = ""
+    st.session_state.session_restore_attempted = False
     st.session_state.api_key = ""
     st.session_state.pop("documents", None)
     st.session_state.pop("last_answer", None)
@@ -522,7 +667,16 @@ if st.session_state.password_reset_mode:
         st.stop()
     st.session_state.password_reset_mode = False
 
-if not current_access_token():
+
+# Restore the browser-persisted session before checking authentication.
+restore_persistent_session()
+
+has_authentication = bool(
+    current_access_token()
+    or st.session_state.get("rag_session_id")
+)
+
+if not has_authentication:
     render_auth_page()
     st.stop()
 
@@ -589,15 +743,21 @@ with st.sidebar:
 
 
 def api_headers() -> dict[str, str]:
-    """Build backend authentication headers using the Supabase JWT."""
+    """Build backend headers using the persistent session or Supabase JWT."""
+
+    session_id = st.session_state.get("rag_session_id", "")
+    if session_id:
+        return {
+            "X-RAG-Session": session_id,
+        }
+
     token = current_access_token()
+    if token:
+        return {
+            "Authorization": f"Bearer {token}",
+        }
 
-    if not token:
-        return {}
-
-    return {
-        "Authorization": f"Bearer {token}",
-    }
+    return {}
 
 
 def show_api_error(response: requests.Response) -> None:
@@ -615,8 +775,11 @@ def show_api_error(response: requests.Response) -> None:
 
 
 def authentication_available() -> bool:
-    """Check that the current user has an authenticated Supabase session."""
-    if current_access_token():
+    """Check whether a persistent session or Supabase token is available."""
+    if (
+        st.session_state.get("rag_session_id")
+        or current_access_token()
+    ):
         return True
 
     st.error("Authentication required. Please log in again.")

@@ -1,3 +1,13 @@
+from fastapi import Request, Response
+from src.auth.session_service import (
+    SessionAuthenticationError,
+    create_session,
+    get_session,
+    refresh_session,
+    revoke_session,
+)
+from src.auth.session_store import RedisSessionStore
+
 import asyncio
 import time
 from hashlib import sha256
@@ -22,6 +32,124 @@ from src.generation.llm import LLMClient, LLMUnavailableError
 
 
 router = APIRouter()
+
+
+import secrets
+
+
+class SessionCreateRequest(BaseModel):
+    access_token: str = Field(..., min_length=1, max_length=8192)
+    refresh_token: str = Field(..., min_length=1, max_length=8192)
+
+
+def _get_session_store() -> RedisSessionStore:
+    if not settings.redis_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Session persistence is not configured.",
+        )
+
+    try:
+        return RedisSessionStore(settings.redis_url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Session persistence is unavailable.",
+        ) from exc
+
+
+def _validate_frontend_origin(request: Request) -> None:
+    origin = request.headers.get("origin", "").rstrip("/")
+    allowed = {
+        "https://enterprise-rag-frontend-g1bm.onrender.com",
+    }
+
+    if not origin or origin not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="Origin not allowed.",
+        )
+
+
+@router.post("/auth/session")
+def create_auth_session(
+    payload: SessionCreateRequest,
+    request: Request,
+):
+    """Create a Redis-backed session and return its opaque identifier."""
+    _validate_frontend_origin(request)
+    store = _get_session_store()
+
+    try:
+        session_id, user = create_session(
+            store,
+            payload.access_token,
+            payload.refresh_token,
+        )
+    except SessionAuthenticationError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Unable to establish an authenticated session.",
+        ) from exc
+
+    return {
+        "session_id": session_id,
+        "user": user,
+    }
+
+
+@router.get("/auth/session")
+def restore_auth_session(
+    request: Request,
+    x_rag_session: str | None = Header(
+        default=None,
+        alias="X-RAG-Session",
+    ),
+):
+    """Restore a session using its explicitly supplied identifier."""
+    _validate_frontend_origin(request)
+
+    if not x_rag_session:
+        raise HTTPException(
+            status_code=401,
+            detail="Session not found.",
+        )
+
+    store = _get_session_store()
+
+    try:
+        user = get_session(store, x_rag_session)
+    except SessionAuthenticationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Session restoration is temporarily unavailable.",
+        ) from exc
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Session expired or revoked.",
+        )
+
+    return {"user": user}
+
+
+@router.delete("/auth/session")
+def delete_auth_session(
+    request: Request,
+    x_rag_session: str | None = Header(
+        default=None,
+        alias="X-RAG-Session",
+    ),
+):
+    """Revoke the supplied server-side session."""
+    _validate_frontend_origin(request)
+
+    if x_rag_session:
+        store = _get_session_store()
+        store.revoke(x_rag_session)
+
+    return {"signed_out": True}
 
 api_key_header = APIKeyHeader(
     name="X-API-Key",
@@ -148,15 +276,20 @@ def _get_workspace_for_supabase_token(token: str) -> str:
 def get_workspace_id(
     api_key: str | None = Depends(api_key_header),
     authorization: str | None = Header(default=None),
+    x_rag_session: str | None = Header(
+        default=None,
+        alias="X-RAG-Session",
+    ),
 ) -> str:
-    """Return the workspace for a Supabase session or legacy API key."""
+    """Resolve a workspace from a Supabase token, persistent session, or API key."""
 
-    # FastAPI injects a Header value when this function is used as a dependency.
-    # Tests and other direct callers may omit the argument, in which case the
-    # default Header object must not be treated as an actual header string.
     if not isinstance(authorization, str):
         authorization = None
 
+    if not isinstance(x_rag_session, str):
+        x_rag_session = None
+
+    # Preserve existing Supabase Bearer-token authentication.
     if authorization:
         scheme, _, token = authorization.partition(" ")
 
@@ -168,6 +301,34 @@ def get_workspace_id(
             detail="Invalid Authorization header.",
         )
 
+    # New Redis-backed persistent-session authentication.
+    if x_rag_session:
+        store = _get_session_store()
+
+        try:
+            user = get_session(store, x_rag_session)
+        except SessionAuthenticationError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Session authentication is temporarily unavailable.",
+            ) from exc
+
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Session expired or revoked. Please log in again.",
+            )
+
+        user_id = user.get("user_id")
+        if not isinstance(user_id, str) or not user_id:
+            raise HTTPException(
+                status_code=401,
+                detail="Session user identity is invalid.",
+            )
+
+        return f"user-{user_id}"
+
+    # Preserve legacy API-key authentication.
     return _get_workspace_for_api_key(api_key)
 
 

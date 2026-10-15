@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
+    redis_url: str | None = None
 
     llm_provider: str = "groq"
     llm_fallback_provider: str = "gemini"
