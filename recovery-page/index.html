@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reset password | Enterprise RAG Assistant</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      padding: 24px; background: #0b0b0c; color: #f4f4f5;
+      font: 16px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    main {
+      width: min(100%, 460px); box-sizing: border-box; padding: 28px;
+      border: 1px solid #333; border-radius: 16px; background: #151516;
+    }
+    h1 { margin-top: 0; font-size: 1.65rem; }
+    label { display: block; margin: 16px 0 6px; }
+    input {
+      box-sizing: border-box; width: 100%; padding: 12px;
+      border: 1px solid #555; border-radius: 8px; background: #09090a;
+      color: #fff; font: inherit;
+    }
+    button, a.button {
+      display: inline-block; box-sizing: border-box; width: 100%;
+      margin-top: 20px; padding: 12px; border: 0; border-radius: 8px;
+      background: #e5e7eb; color: #111; font: inherit; font-weight: 650;
+      text-align: center; text-decoration: none; cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: wait; }
+    #status { margin-top: 16px; overflow-wrap: anywhere; }
+    .muted { color: #b4b4b8; font-size: .92rem; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Reset your password</h1>
+  <p class="muted">Choose a new password for your Enterprise RAG Assistant account.</p>
+
+  <form id="reset-form" hidden>
+    <label for="password">New password</label>
+    <input id="password" type="password" minlength="6" autocomplete="new-password" required>
+    <label for="confirm-password">Confirm new password</label>
+    <input id="confirm-password" type="password" minlength="6" autocomplete="new-password" required>
+    <button id="submit" type="submit">Update password</button>
+  </form>
+
+  <p id="status" role="status">Verifying your recovery link…</p>
+  <a id="login-link" class="button" href="#" hidden>Return to the app and sign in</a>
+</main>
+
+<script type="module">
+  import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+  // Replace these placeholders with the project's public Supabase URL and
+  // publishable/anon key. Never put a service_role key here.
+  const SUPABASE_URL = "https://njjqwhdmezooaubjmahc.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_voZZu9ZPrUrHYbfyfT88kA_XfZekaj9";
+  const APP_URL = "https://enterprise-rag-frontend-g1bm.onrender.com";
+
+  const statusEl = document.querySelector("#status");
+  const form = document.querySelector("#reset-form");
+  const submitButton = document.querySelector("#submit");
+  const loginLink = document.querySelector("#login-link");
+  let supabase;
+
+  function showStatus(message) {
+    statusEl.textContent = message;
+  }
+
+  function showLoginLink() {
+    loginLink.href = APP_URL;
+    loginLink.hidden = false;
+  }
+
+  async function main() {
+    if (
+      SUPABASE_URL.startsWith("REPLACE_") ||
+      SUPABASE_ANON_KEY.startsWith("REPLACE_") ||
+      APP_URL.startsWith("REPLACE_")
+    ) {
+      showStatus("Setup is incomplete. The site administrator must configure the Supabase public URL, public anon/publishable key, and app URL.");
+      return;
+    }
+
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        flowType: "implicit",
+        detectSessionInUrl: true,
+        persistSession: true,
+        autoRefreshToken: true
+      }
+    });
+
+    // The Supabase JS client processes the recovery tokens from the URL
+    // fragment. Never copy them into query parameters or log them.
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session) {
+      showStatus("This recovery link is invalid, expired, or already used. Request a new password-reset email and open the newest link.");
+      return;
+    }
+
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData.user) {
+      showStatus("Could not verify the recovery session. Request a new reset link and try again.");
+      return;
+    }
+
+    form.hidden = false;
+    showStatus("Recovery link verified. Enter your new password.");
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = document.querySelector("#password").value;
+    const confirmPassword = document.querySelector("#confirm-password").value;
+
+    if (password.length < 6) {
+      showStatus("Password must be at least 6 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      showStatus("Passwords do not match.");
+      return;
+    }
+
+    submitButton.disabled = true;
+    showStatus("Updating your password…");
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        showStatus("Could not update the password: " + error.message);
+        return;
+      }
+
+      // Sign out the temporary recovery session in this page, then return
+      // to the Streamlit app. The user signs in there with the new password.
+      await supabase.auth.signOut();
+      form.hidden = true;
+      showStatus("Password updated successfully. Return to the app and sign in with your new password.");
+      showLoginLink();
+    } catch {
+      showStatus("An unexpected error occurred. Request a new reset link if the problem continues.");
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+
+  main().catch(() => {
+    showStatus("Could not verify this recovery link. Request a new reset email and try again.");
+  });
+</script>
+</body>
+</html>
