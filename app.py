@@ -401,8 +401,6 @@ def render_auth_page() -> None:
     st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
     st.title("Enterprise RAG Assistant")
 
-    render_backend_status()
-
     st.markdown(
         '<div class="auth-subtitle">'
         "Sign in to securely access your documents and AI assistant."
@@ -693,6 +691,8 @@ if not has_authentication:
     render_auth_page()
     st.stop()
 
+# Authenticated users see backend status on the dashboard.
+render_backend_status()
 
 # -----------------------------
 # Authenticated account sidebar
