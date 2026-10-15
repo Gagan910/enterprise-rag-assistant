@@ -465,7 +465,6 @@ def render_auth_page() -> None:
                             )
                         else:
                             handle_auth_response(session)
-                            st.rerun()
 
                     except Exception as exc:
                         st.error(f"Login failed: {exc}")
