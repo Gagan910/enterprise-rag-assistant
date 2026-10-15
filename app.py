@@ -682,6 +682,14 @@ has_authentication = bool(
 )
 
 if not has_authentication:
+    cookie_value = cookie_manager.get(SESSION_COOKIE_NAME)
+
+    # The cookie component may not have initialized yet.
+    if cookie_value is None:
+        st.info("Restoring your session...")
+        st.stop()
+
+    # Cookie loading completed, but no session exists.
     render_auth_page()
     st.stop()
 
