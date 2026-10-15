@@ -603,10 +603,18 @@ def render_auth_page() -> None:
 # rendering the authentication gate. Supabase PKCE returns an auth code
 # in the query string, which the Python client exchanges for a session.
 callback_mode = st.query_params.get("mode")
-if callback_mode == "recovery" and st.query_params.get("code"):
-    if process_auth_code():
-        st.session_state.password_reset_mode = True
-        st.rerun()
+auth_code = st.query_params.get("code")
+
+if callback_mode == "recovery":
+    if auth_code:
+        if process_auth_code():
+            st.session_state.password_reset_mode = True
+            st.rerun()
+    else:
+        st.error(
+            "The password-reset link did not provide an authorization code. "
+            "Please request a new reset link and try again."
+        )
 
 elif st.query_params.get("code") and not current_access_token():
     if process_auth_code():
