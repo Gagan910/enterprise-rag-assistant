@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import os
 
 import uuid
@@ -204,15 +206,12 @@ def handle_auth_response(session) -> None:
         session_id,
         key=f"set_rag_session_{session_id[:12]}",
         path="/",
-        max_age=SESSION_MAX_AGE_SECONDS,
+        expires_at=datetime.now(timezone.utc)
+        + timedelta(seconds=SESSION_MAX_AGE_SECONDS),
         secure=True,
         same_site="lax",
     )
 
-    st.write(
-        "DEBUG: cookie set command issued",
-        bool(session_id),
-    )
 
     st.session_state["cookie_set_command_issued"] = True
     st.session_state.rag_session_id = session_id
