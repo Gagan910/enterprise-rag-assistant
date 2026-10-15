@@ -202,6 +202,7 @@ def handle_auth_response(session) -> None:
     cookie_manager.set(
         SESSION_COOKIE_NAME,
         session_id,
+        key=f"set_rag_session_{session_id[:12]}",
         path="/",
         max_age=SESSION_MAX_AGE_SECONDS,
         secure=True,
