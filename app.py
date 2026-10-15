@@ -285,7 +285,7 @@ def restore_persistent_session() -> None:
 
 
 def sign_out() -> None:
-    """Revoke the persistent backend session and clear local authentication."""
+    """Revoke the persistent session and clear local authentication."""
     session_id = st.session_state.get("rag_session_id", "")
 
     if session_id:
@@ -296,10 +296,9 @@ def sign_out() -> None:
                     **_session_request_headers(),
                     "X-RAG-Session": session_id,
                 },
-                timeout=10,
+                timeout=5,
             )
         except requests.RequestException:
-            # Local logout still proceeds if the backend is unavailable.
             pass
 
     if supabase is not None:
@@ -308,18 +307,26 @@ def sign_out() -> None:
         except Exception:
             pass
 
+    # Request deletion of the persistent browser cookie.
     try:
         cookie_manager.delete(SESSION_COOKIE_NAME)
     except Exception:
         pass
 
-    st.session_state.supabase_session = None
-    st.session_state.supabase_user = None
-    st.session_state.rag_session_id = ""
-    st.session_state.session_restore_attempted = False
-    st.session_state.api_key = ""
-    st.session_state.pop("documents", None)
-    st.session_state.pop("last_answer", None)
+    # Clear local authentication and user-specific state.
+    for key in (
+        "supabase_session",
+        "supabase_user",
+        "rag_session_id",
+        "api_key",
+        "documents",
+        "last_answer",
+        "session_restore_attempted",
+        "cookie_set_command_issued",
+    ):
+        st.session_state.pop(key, None)
+
+    st.rerun()
 
 
 # -----------------------------
@@ -692,12 +699,12 @@ has_authentication = bool(
 if not has_authentication:
     cookie_value = cookie_manager.get(SESSION_COOKIE_NAME)
 
-    # The cookie component may not have initialized yet.
-    if cookie_value is None:
+    if cookie_value:
+        # A cookie exists, but session restoration may still be processing.
         st.info("Restoring your session...")
         st.stop()
 
-    # Cookie loading completed, but no session exists.
+    # No cookie and no active session: show login.
     render_auth_page()
     st.stop()
 
