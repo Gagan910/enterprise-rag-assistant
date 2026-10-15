@@ -12,13 +12,16 @@ from supabase import Client, ClientOptions, create_client
 
 DEFAULT_API_URL = "https://enterprise-rag-assistant-ik30.onrender.com"
 
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent
+LOGO_PATH = APP_DIR / "assets" / "logo.png"
 
 st.set_page_config(
     page_title="Enterprise RAG Assistant",
-    page_icon="R",
+    page_icon=str(LOGO_PATH),
     layout="wide",
 )
-
 
 # -----------------------------
 # Configuration
@@ -399,7 +402,13 @@ def render_auth_page() -> None:
     )
 
     st.markdown('<div class="auth-shell">', unsafe_allow_html=True)
-    st.title("Enterprise RAG Assistant")
+    logo_col, title_col = st.columns([1, 6], vertical_alignment="center")
+
+    with logo_col:
+        st.image(str(LOGO_PATH), width=85)
+
+    with title_col:
+        st.title("Enterprise RAG Assistant")
 
     st.markdown(
         '<div class="auth-subtitle">'
@@ -462,6 +471,7 @@ def render_auth_page() -> None:
                                 "Login did not return an authenticated session."
                             )
                         else:
+                            st.session_state.backend_health_status = check_backend_health()
                             handle_auth_response(session)
 
                     except Exception as exc:
@@ -717,8 +727,14 @@ with st.sidebar:
 # Header
 # -----------------------------
 
-st.title("Enterprise Document Intelligence & RAG Assistant")
-st.caption("AI-powered document search, retrieval, and grounded answers.")
+logo_col, title_col = st.columns([1, 8], vertical_alignment="center")
+
+with logo_col:
+    st.image(str(LOGO_PATH), width=100)
+
+with title_col:
+    st.title("Enterprise Document Intelligence & RAG Assistant")
+    st.caption("AI-powered document search, retrieval, and grounded answers.")
 
 
 # -----------------------------
