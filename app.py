@@ -209,6 +209,11 @@ def handle_auth_response(session) -> None:
         same_site="lax",
     )
 
+    st.write(
+        "DEBUG: cookie set command issued",
+        bool(session_id),
+    )
+
     st.session_state.rag_session_id = session_id
     st.session_state.supabase_session = session
 
