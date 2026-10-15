@@ -169,8 +169,9 @@ def _session_request_headers() -> dict[str, str]:
     }
 
 
+
 def handle_auth_response(session) -> None:
-    """Create a persistent backend session after Supabase authentication."""
+    """Store Supabase authentication and establish a persistent backend session."""
     if session is None:
         return
 
@@ -182,52 +183,64 @@ def handle_auth_response(session) -> None:
             "Supabase did not return both session tokens."
         )
 
-    response = requests.post(
-        f"{api_url}/auth/session",
-        headers=_session_request_headers(),
-        json={
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-        },
-        timeout=20,
-    )
-
-    if not response.ok:
-        raise RuntimeError(
-            "Could not establish a persistent backend session "
-            f"(HTTP {response.status_code})."
-        )
-
-    payload = response.json()
-    session_id = payload.get("session_id")
-
-    if not isinstance(session_id, str) or not session_id:
-        raise RuntimeError("The backend returned no valid session ID.")
-
-    cookie_manager.set(
-        SESSION_COOKIE_NAME,
-        session_id,
-        key=f"set_rag_session_{session_id[:12]}",
-        path="/",
-        expires_at=datetime.now(timezone.utc)
-        + timedelta(seconds=SESSION_MAX_AGE_SECONDS),
-        secure=True,
-        same_site="lax",
-    )
-
-
-    st.session_state["cookie_set_command_issued"] = True
-    st.session_state.rag_session_id = session_id
+    # Preserve the successful Supabase login immediately.
     st.session_state.supabase_session = session
 
     user = getattr(session, "user", None)
     if user is None and isinstance(session, dict):
         user = session.get("user")
 
-    st.session_state.supabase_user = (
-        payload.get("user") or user
-    )
+    st.session_state.supabase_user = user
     st.session_state.session_restore_attempted = True
+    st.session_state.rag_session_id = ""
+
+    try:
+        response = requests.post(
+            f"{api_url}/auth/session",
+            headers=_session_request_headers(),
+            json={
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            },
+            timeout=20,
+        )
+
+        if not response.ok:
+            st.session_state.backend_session_warning = (
+                "You're signed in, but persistent session setup is "
+                "temporarily unavailable. Some features may not work yet."
+            )
+            return
+
+        payload = response.json()
+        session_id = payload.get("session_id")
+
+        if not isinstance(session_id, str) or not session_id:
+            st.session_state.backend_session_warning = (
+                "You're signed in, but persistent session setup is unavailable."
+            )
+            return
+
+        cookie_manager.set(
+            SESSION_COOKIE_NAME,
+            session_id,
+            key=f"set_rag_session_{session_id[:12]}",
+            path="/",
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=SESSION_MAX_AGE_SECONDS),
+            secure=True,
+            same_site="lax",
+        )
+
+        st.session_state["cookie_set_command_issued"] = True
+        st.session_state.rag_session_id = session_id
+        st.session_state.supabase_user = payload.get("user") or user
+        st.session_state.pop("backend_session_warning", None)
+
+    except requests.RequestException:
+        st.session_state.backend_session_warning = (
+            "You're signed in. The backend may still be waking up."
+        )
 
 
 def restore_persistent_session() -> None:
@@ -687,14 +700,15 @@ def render_password_reset_page() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+
 # Authentication is the first screen. Nothing from the RAG dashboard
-# is rendered until a valid Supabase session exists.
+# is rendered until a valid session exists.
+
 if st.session_state.password_reset_mode:
     if current_access_token():
         render_password_reset_page()
         st.stop()
     st.session_state.password_reset_mode = False
-
 
 # Restore the browser-persisted session before checking authentication.
 restore_persistent_session()
@@ -708,16 +722,15 @@ if not has_authentication:
     cookie_value = cookie_manager.get(SESSION_COOKIE_NAME)
 
     if cookie_value:
-        # A cookie exists, but session restoration may still be processing.
         st.info("Restoring your session...")
         st.stop()
 
-    # No cookie and no active session: show login.
     render_auth_page()
     st.stop()
 
-# Authenticated users see backend status on the dashboard.
+# Only authenticated users reach this point.
 render_backend_status()
+
 
 # -----------------------------
 # Authenticated account sidebar
@@ -750,40 +763,6 @@ with logo_col:
 with title_col:
     st.title("Enterprise Document Intelligence & RAG Assistant")
     st.caption("AI-powered document search, retrieval, and grounded answers.")
-
-
-# -----------------------------
-# Backend status
-# -----------------------------
-
-# -----------------------------
-# Backend status
-# -----------------------------
-
-with st.sidebar:
-    if st.button(
-        "Check Backend",
-        use_container_width=True,
-    ):
-        try:
-            response = requests.get(
-                f"{api_url}/health",
-                timeout=5,
-            )
-
-            if response.ok:
-                st.success("Backend is healthy.")
-            else:
-                st.info(
-                    "Backend is waking up. "
-                    "Please try again in a few seconds."
-                )
-
-        except requests.RequestException:
-            st.info(
-                "Backend is waking up. "
-                "Please try again in a few seconds."
-            )
 
 
 def api_headers() -> dict[str, str]:
@@ -835,7 +814,7 @@ def authentication_available() -> bool:
 # -----------------------------
 
 left_col, main_col = st.columns(
-    [1, 2],
+    [0.85, 1.65],
     gap="large",
 )
 
