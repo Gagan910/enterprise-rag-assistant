@@ -1,70 +1,168 @@
+
 # Enterprise Document Intelligence & RAG Assistant
 
-An end-to-end Retrieval-Augmented Generation (RAG) application for asking questions about enterprise documents and receiving grounded answers with source citations.
+An end-to-end Retrieval-Augmented Generation (RAG) application that enables users to query enterprise documents and receive grounded answers with source citations. The platform combines semantic retrieval, cross-encoder reranking, LLM-based generation, authentication, and document management.
 
-**Live demo:** [Frontend](https://enterprise-rag-frontend-g1bm.onrender.com) · [API](https://enterprise-rag-assistant-ik30.onrender.com) · [API docs](https://enterprise-rag-assistant-ik30.onrender.com/docs) · [Health](https://enterprise-rag-assistant-ik30.onrender.com/health)
+**Live Demo:** [Streamlit Frontend](https://enterprise-rag-frontend-g1bm.onrender.com)
 
-**Repository:** [Gagan910/enterprise-rag-assistant](https://github.com/Gagan910/enterprise-rag-assistant)
+**Backend API:** [FastAPI](https://enterprise-rag-assistant-ik30.onrender.com) · [Swagger API Docs](https://enterprise-rag-assistant-ik30.onrender.com/docs) · [Health Check](https://enterprise-rag-assistant-ik30.onrender.com/health)
 
----
+**GitHub:** [Gagan910/enterprise-rag-assistant](https://github.com/Gagan910/enterprise-rag-assistant)
 
 ## Features
 
-- **Document ingestion:** PDF, DOCX, and TXT.
-- **RAG pipeline:** document parsing, text cleaning, chunking, embeddings, retrieval, reranking, and answer generation.
-- **Grounded answers:** relevant source citations accompany responses.
-- **Hybrid LLM configuration:** Groq primary provider with Gemini fallback.
-- **Retrieval quality:** Sentence Transformers embeddings and cross-encoder reranking.
-- **Document management:** upload, list, retrieve, and delete documents, with duplicate detection and metadata filtering.
-- **Authentication and isolation:** Supabase authentication and user/workspace-aware access controls, plus legacy API-key compatibility.
-- **Evaluation and tracking:** retrieval evaluation with MLflow; DVC and DagsHub integration.
-- **Deployment:** FastAPI backend, Streamlit frontend, Docker, and GitHub Actions CI.
+- **Document ingestion:** Upload PDF, DOCX, and TXT files.
+- **Cancellable batch uploads:** Upload multiple documents with live progress and cancel a batch without starting the remaining files. An in-progress request may finish.
+- **RAG pipeline:** Document parsing, text cleaning, chunking, embedding generation, retrieval, reranking, and answer generation.
+- **Grounded responses:** Generate answers using retrieved document context and source citations.
+- **Hybrid LLM configuration:** Groq primary provider with Gemini fallback, according to the application configuration.
+- **Semantic retrieval:** Sentence Transformers embeddings with ChromaDB / Chroma Cloud vector storage.
+- **Cross-encoder reranking:** Re-rank retrieved passages to improve context relevance.
+- **Document management:** List, retrieve, upload, and delete indexed documents, with duplicate detection and metadata filtering.
+- **Authentication:** Supabase-based authentication and user/workspace-aware access controls.
+- **Password recovery:** Password-reset workflow with a dedicated recovery page.
+- **Session management:** Redis-backed session storage using opaque session identifiers and a seven-day TTL.
+- **API security:** Session-aware API requests and legacy API-key compatibility.
+- **Evaluation and experiment tracking:** Retrieval evaluation with MLflow, with DVC and DagsHub integration.
+- **Testing and deployment:** Pytest, Docker, GitHub Actions, and Render.
 
 ## Architecture
 
 ```text
-PDF / DOCX / TXT
+                    DOCUMENT INGESTION
+                             |
+                   PDF / DOCX / TXT
+                             |
+                             v
+                    Parse and Clean
+                             |
+                             v
+                     Text Chunking
+                             |
+                             v
+                    Embedding Model
+                             |
+                             v
+                       ChromaDB
+                             |
+                             |
+USER QUESTION ---------------+
        |
        v
-Parse -> Clean -> Chunk -> Embed
-                         |
-                         v
-                    ChromaDB
-                         |
-Question -> Retrieve top 5 -> Rerank top 3
-                                      |
-                                      v
-                            Context + Prompt
-                                      |
-                                      v
-                              Groq / Gemini
-                                      |
-                                      v
-                       Grounded answer + citations
+Retrieve Relevant Passages
+       |
+       v
+Cross-Encoder Reranking
+       |
+       v
+Build Context and Prompt
+       |
+       v
+     Groq / Gemini
+       |
+       v
+Grounded Answer + Citations
 ```
 
-## Tech stack
+### Application and session architecture
 
-| Layer | Tools |
+```text
+User
+ |
+ v
+Streamlit Frontend
+ |
+ +---- Supabase Authentication
+ |
+ +---- Session Management
+ |          |
+ |          v
+ |        Redis
+ |    Session IDs / TTL
+ |
+ v
+FastAPI Backend
+ |
+ +---- Document Processing
+ |
+ +---- Retrieval and Reranking
+ |
+ +---- LLM Providers
+ |
+ v
+Grounded Response
+```
+
+## Technology Stack
+
+| Layer | Technologies |
 |---|---|
-| API | FastAPI, Uvicorn, Pydantic |
-| UI | Streamlit |
-| Embeddings | Sentence Transformers, `all-MiniLM-L6-v2` |
-| Vector store | ChromaDB / Chroma Cloud |
-| Reranking | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| Programming language | Python 3.12 |
+| Frontend | Streamlit |
+| Backend API | FastAPI, Uvicorn, Pydantic |
+| Authentication | Supabase Auth |
+| Session storage | Redis |
+| Embeddings | Sentence Transformers |
+| Embedding model | `all-MiniLM-L6-v2` |
+| Vector database | ChromaDB / Chroma Cloud |
+| Reranking | Cross-encoder |
+| Reranker model | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | LLM providers | Groq, Google Gemini |
-| Authentication | Supabase |
-| Evaluation and versioning | MLflow, DVC, DagsHub |
-| Testing and deployment | Pytest, Docker, GitHub Actions, Render |
+| Evaluation | MLflow |
+| Data and experiment versioning | DVC, DagsHub |
+| Testing | Pytest |
+| Containerization | Docker |
+| CI/CD | GitHub Actions |
+| Deployment | Render |
 
-## RAG configuration
+## RAG Pipeline
 
-Current defaults from `src/config/settings.py`:
+1. **Ingestion:** Accept supported document formats.
+2. **Parsing and cleaning:** Extract and normalize document text.
+3. **Chunking:** Split content into smaller, overlapping passages.
+4. **Embedding:** Convert passages into vector representations.
+5. **Retrieval:** Retrieve the top five candidate passages.
+6. **Reranking:** Re-rank candidates and select the top three passages.
+7. **Prompt construction:** Build context from the selected passages.
+8. **Generation:** Use the configured LLM provider to generate an answer.
+9. **Citations:** Return an answer grounded in retrieved document sources.
+
+## Document Management
+
+The application supports:
+
+- Multi-file document uploads.
+- Upload progress reporting.
+- Cooperative batch cancellation.
+- Indexed document listing and refresh.
+- Document deletion.
+- Document metadata and chunk-count display.
+- Duplicate detection and metadata filtering.
+
+Cancellation prevents subsequent files from starting. It does not roll back a file that has already been accepted or processed by the backend.
+
+## Authentication and Session Management
+
+The application integrates Supabase authentication with backend session handling.
+
+- Authenticated access to application features.
+- Password-reset and recovery flow.
+- Opaque session identifiers.
+- Redis-backed session storage.
+- Seven-day session TTL.
+- Session-aware frontend-to-backend requests.
+- User/workspace-aware access controls.
+
+Redis is used for session infrastructure; it is not the vector database. ChromaDB is used for vector storage and semantic retrieval.
+
+## Configuration
+
+The project uses environment-based configuration. Documented defaults include:
 
 | Setting | Default |
 |---|---|
 | Primary LLM provider | `groq` |
-| Fallback provider | `gemini` |
+| Fallback LLM provider | `gemini` |
 | Groq model | `llama-3.3-70b-versatile` |
 | Gemini model | `gemini-3.7-flash` |
 | Embedding model | `all-MiniLM-L6-v2` |
@@ -74,23 +172,30 @@ Current defaults from `src/config/settings.py`:
 | Retrieval top-k | `5` |
 | Rerank top-k | `3` |
 
-Settings are loaded from `.env` as UTF-8. `GEMINI_API_KEY` is required by the current settings model, even when Groq is configured as the primary provider. Keep API keys and credentials out of source control.
+Verify these values against the current configuration before deployment. The application settings model has required credentials and configuration constraints; follow `src/config/settings.py` and the deployment environment for the authoritative list of required variables.
 
-## Run locally
+Never commit `.env`, frontend secrets, Redis credentials, Supabase secrets, or LLM API keys.
 
-### 1. Prerequisites
+## Run Locally
+
+### Prerequisites
 
 - Python 3.12
 - Git
-- API credentials for the configured LLM providers
-- Supabase credentials if using authenticated/workspace features
+- Credentials for the configured LLM providers
+- Supabase configuration for authentication
+- Redis configuration for session storage, as required by the deployment settings
 
-### 2. Clone and install backend dependencies
+### 1. Clone the repository
 
 ```powershell
 git clone https://github.com/Gagan910/enterprise-rag-assistant.git
 cd enterprise-rag-assistant
+```
 
+### 2. Set up the backend environment
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
@@ -98,23 +203,23 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root and set the required values. Use the variable names defined in `src/config/settings.py`; do not commit `.env`.
+Configure the required environment variables using the names defined in the application settings.
 
-### 3. Start the API
+### 3. Start the backend
 
 ```powershell
 uvicorn src.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` to explore the API.
+Open the API documentation at:
 
-### 4. Start the Streamlit frontend
+http://127.0.0.1:8000/docs
 
-In a second PowerShell terminal:
+### 4. Set up the frontend
+
+Open a second terminal in the repository root:
 
 ```powershell
-cd C:\MLProjects\enterprise-rag-assistant
-
 python -m venv .streamlit-venv
 .\.streamlit-venv\Scripts\Activate.ps1
 
@@ -122,7 +227,9 @@ pip install -r requirements-frontend.txt
 streamlit run app.py
 ```
 
-Configure frontend secrets in `.streamlit/secrets.toml` as required by the application, including `RAG_API_URL`, `SUPABASE_URL`, and `SUPABASE_ANON_KEY`. Do not commit the secrets file.
+Configure frontend secrets in `.streamlit/secrets.toml` when required. These may include `RAG_API_URL`, `SUPABASE_URL`, and `SUPABASE_ANON_KEY`.
+
+Use the actual configuration names and requirements from the current codebase.
 
 ## Testing
 
@@ -132,7 +239,7 @@ Run the test suite from the repository root:
 python -m pytest -q
 ```
 
-The suite was observed to **collect 114 tests on 14 October 2026**. Collection is not the same as a successful test run; run the command above to verify the current checkout.
+The project includes automated tests. Run the command above to obtain the current test count and results; do not treat test collection as proof that all tests pass.
 
 ## Docker
 
@@ -142,52 +249,61 @@ Build the backend image:
 docker build -t enterprise-rag-assistant:latest .
 ```
 
-Run it with the required environment variables configured locally:
+Run the application with the required environment variables:
 
 ```powershell
 docker run --rm -p 8000:8000 --env-file .env enterprise-rag-assistant:latest
 ```
 
-Never place production credentials in the image or commit them to the repository.
+Configure external services such as Redis, Supabase, the vector store, and LLM providers according to the deployment setup. Ensure that required service URLs and credentials are available to the container.
 
 ## Evaluation
 
-The project includes retrieval evaluation and MLflow tracking. A previously recorded evaluation reported **Hit Rate@5 = 1.00** and **MRR@5 = 1.00** on its evaluation set. These are dataset-specific results, not a guarantee of performance on arbitrary documents or queries.
+The project includes retrieval evaluation and MLflow tracking.
 
-## Deployment and experiment tracking
+A previously recorded evaluation reported:
 
-- **Frontend:** [Render deployment](https://enterprise-rag-frontend-g1bm.onrender.com)
-- **Backend:** [Render deployment](https://enterprise-rag-assistant-ik30.onrender.com)
+- **Hit Rate@5:** 1.00
+- **MRR@5:** 1.00
+
+These results apply to the specific evaluation dataset and setup used. They should not be interpreted as guaranteed performance on arbitrary documents or user queries.
+
+## Deployment
+
+- **Frontend:** [Render](https://enterprise-rag-frontend-g1bm.onrender.com)
+- **Backend:** [Render](https://enterprise-rag-assistant-ik30.onrender.com)
 - **API documentation:** [Swagger UI](https://enterprise-rag-assistant-ik30.onrender.com/docs)
-- **DagsHub repository:** [enterprise-rag-assistant](https://dagshub.com/Gagan910/enterprise-rag-assistant)
+- **Experiment tracking:** [DagsHub repository](https://dagshub.com/Gagan910/enterprise-rag-assistant)
 
-The repository also includes Docker and CI configuration. Check the workflow file for the exact branch and event triggers configured in the current checkout.
+The repository includes deployment and CI configuration. Consult the current workflow and deployment settings for the exact build steps, environment variables, and triggers.
 
-## Security notes
+## Security Considerations
 
-- Use synthetic or non-sensitive documents for demos unless your deployment has been reviewed and approved for the data involved.
-- Keep `.env`, `.streamlit/secrets.toml`, access tokens, and API keys out of Git.
-- Use authentication and workspace isolation when exposing the application to multiple users.
+- Do not commit API keys, passwords, access tokens, or production credentials.
+- Use environment variables or the platform's secret-management features.
+- Restrict access to authenticated users and enforce workspace-level isolation.
+- Avoid uploading sensitive enterprise documents to a public demo unless the deployment has been approved for that data.
 - Rotate any credential that has been exposed accidentally.
+- Configure Redis access securely and use the appropriate connection and authentication settings for the environment.
 
-## Project structure
+## Project Structure
 
 ```text
 enterprise-rag-assistant/
-├── app.py                    # Streamlit frontend
+├── app.py
 ├── src/
-│   ├── main.py               # FastAPI application
+│   ├── main.py
 │   └── config/
-│       └── settings.py       # Application settings
-├── tests/                    # Automated tests
-├── requirements.txt          # Backend dependencies
-├── requirements-frontend.txt # Frontend dependencies
+│       └── settings.py
+├── tests/
+├── requirements.txt
+├── requirements-frontend.txt
 ├── Dockerfile
 └── README.md
 ```
 
-Additional folders support ingestion, retrieval, evaluation, scripts, and deployment. See the source tree for the current layout.
+Additional modules and folders support document ingestion, retrieval, evaluation, authentication, session management, scripts, and deployment.
 
 ## License
 
-No license is specified here. Contact the repository owner before reusing or redistributing the project.
+No license is specified in this README. Contact the repository owner before reusing or redistributing the project.
