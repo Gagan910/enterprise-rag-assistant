@@ -276,9 +276,9 @@ def restore_persistent_session() -> None:
             timeout=15,
         )
     except requests.RequestException:
-        # Preserve the cookie when the backend is temporarily unavailable.
-        # A later rerun can retry restoration.
+        # Preserve the cookie in case the backend is temporarily unavailable.
         st.session_state.rag_session_id = ""
+        st.session_state.session_restore_attempted = True
         return
 
     if response.status_code == 401:
@@ -290,16 +290,15 @@ def restore_persistent_session() -> None:
 
     if not response.ok:
         st.session_state.rag_session_id = ""
+        st.session_state.session_restore_attempted = True
         return
 
     try:
         payload = response.json()
     except ValueError:
         st.session_state.rag_session_id = ""
+        st.session_state.session_restore_attempted = True
         return
-
-    st.session_state.supabase_user = payload.get("user")
-    st.session_state.session_restore_attempted = True
 
 
 def sign_out() -> None:
@@ -713,6 +712,9 @@ if st.session_state.password_reset_mode:
         st.stop()
     st.session_state.password_reset_mode = False
 
+# Keep waking/checking the backend even before the user logs in.
+render_backend_status()
+
 # Restore the browser-persisted session before checking authentication.
 restore_persistent_session()
 
@@ -724,15 +726,14 @@ has_authentication = bool(
 if not has_authentication:
     cookie_value = cookie_manager.get(SESSION_COOKIE_NAME)
 
-    if cookie_value:
+    if cookie_value and not st.session_state.get(
+        "session_restore_attempted", False
+    ):
         st.info("Restoring your session...")
         st.stop()
 
     render_auth_page()
     st.stop()
-
-# Only authenticated users reach this point.
-render_backend_status()
 
 
 # -----------------------------
