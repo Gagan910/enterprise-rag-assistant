@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import threading
+
 import os
 
 import uuid
@@ -824,12 +826,16 @@ left_col, main_col = st.columns(
 # LEFT: Documents + Upload
 # ============================================================
 
+
+
 with left_col:
     st.subheader("Documents")
 
+    # Refresh indexed documents
     if st.button(
         "Refresh Documents",
         use_container_width=True,
+        key="refresh_documents_button",
     ):
         if authentication_available():
             try:
@@ -840,178 +846,270 @@ with left_col:
                 )
 
                 if response.ok:
-                    st.session_state["documents"] = (
-                        response.json()
-                    )
+                    st.session_state["documents"] = response.json()
+                    st.success("Documents refreshed.")
                 else:
                     show_api_error(response)
 
             except requests.RequestException as exc:
-                st.error(
-                    f"Connection failed: {exc}"
-                )
+                st.error(f"Connection failed: {exc}")
 
-    documents = st.session_state.get(
-        "documents",
-        [],
-    )
-
-    st.metric(
-        "Indexed Documents",
-        len(documents),
-    )
+    # Display indexed documents
+    documents = st.session_state.get("documents", [])
+    st.metric("Indexed Documents", len(documents))
 
     if documents:
         for document in documents:
             with st.container(border=True):
-                st.write(
-                    f"**{document.get('source', 'Unknown')}**"
-                )
-
+                st.write(f"**{document.get('source', 'Unknown')}**")
+                st.caption(f"Chunks: {document.get('chunk_count', 0)}")
                 st.caption(
-                    f"Chunks: "
-                    f"{document.get('chunk_count', 0)}"
-                )
-
-                st.caption(
-                    f"ID: "
-                    f"{document.get('document_id', 'Unknown')}"
+                    f"ID: {document.get('document_id', 'Unknown')}"
                 )
 
                 document_id = document.get("document_id")
 
-                if document_id:
-                    if st.button(
-                        "🗑️ Delete",
-                        key=f"delete-{document_id}",
-                        use_container_width=True,
-                    ):
-                        try:
-                            with st.spinner(
-                                f"Deleting {document.get('source', 'document')}..."
-                            ):
-                                response = requests.delete(
-                                    f"{api_url}/documents/{document_id}",
-                                    headers=api_headers(),
-                                    timeout=60,
-                                )
-
-                            if response.ok:
-                                st.success(
-                                    f"{document.get('source', 'Document')} deleted successfully."
-                                )
-
-                                # Remove the deleted document from the
-                                # current workspace's cached list.
-                                st.session_state["documents"] = [
-                                    item
-                                    for item in st.session_state.get(
-                                        "documents", []
-                                    )
-                                    if item.get("document_id") != document_id
-                                ]
-
-                                st.rerun()
-                            else:
-                                show_api_error(response)
-
-                        except requests.RequestException as exc:
-                            st.error(
-                                f"Connection failed: {exc}"
+                if document_id and st.button(
+                    "🗑️ Delete",
+                    key=f"delete-{document_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        with st.spinner(
+                            f"Deleting {document.get('source', 'document')}..."
+                        ):
+                            response = requests.delete(
+                                f"{api_url}/documents/{document_id}",
+                                headers=api_headers(),
+                                timeout=60,
                             )
+
+                        if response.ok:
+                            st.session_state["documents"] = [
+                                item
+                                for item in st.session_state.get(
+                                    "documents", []
+                                )
+                                if item.get("document_id") != document_id
+                            ]
+                            st.session_state.pop("last_answer", None)
+                            st.success(
+                                f"{document.get('source', 'Document')} "
+                                "deleted successfully."
+                            )
+                            st.rerun()
+                        else:
+                            show_api_error(response)
+
+                    except requests.RequestException as exc:
+                        st.error(f"Connection failed: {exc}")
     else:
-        st.info(
-            "Click Refresh Documents to load indexed documents."
-        )
+        st.info("Click Refresh Documents to load indexed documents.")
 
+    # Upload panel with responsive cancellation
     st.divider()
-
     st.subheader("Upload")
 
+    @st.fragment(run_every=1)
+    def render_upload_panel():
+        batch = st.session_state.get("upload_batch")
 
-    uploaded_files = st.file_uploader(
-        "Upload PDF, DOCX, or TXT files",
-        type=["pdf", "docx", "txt"],
-        accept_multiple_files=True,
-        help="Select multiple files at once. Maximum file size: 10 MB per file.",
-    )
+        if batch is not None:
+            with batch["lock"]:
+                batch_active = not batch["done"]
+        else:
+            batch_active = False
 
-    if st.button(
-        "📥 Upload & Index",
-        type="primary",
-        use_container_width=True,
-        disabled=not uploaded_files,
-    ):
-        if authentication_available():
-            successful_uploads = 0
-            failed_uploads = 0
+        uploaded_files = st.file_uploader(
+            "Upload PDF, DOCX, or TXT files",
+            type=["pdf", "docx", "txt"],
+            accept_multiple_files=True,
+            help=(
+                "Select multiple files at once. "
+                "Maximum file size: 10 MB per file."
+            ),
+            key="document_uploader",
+            disabled=batch_active,
+        )
 
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        upload_col, cancel_col = st.columns(2)
 
-            for index, uploaded_file in enumerate(uploaded_files):
-                status_text.info(
-                    f"Uploading {index + 1}/{len(uploaded_files)}: "
-                    f"{uploaded_file.name}"
+        with upload_col:
+            upload_clicked = st.button(
+                "📥 Upload & Index",
+                type="primary",
+                use_container_width=True,
+                disabled=not uploaded_files or batch_active,
+                key="upload_index_button",
+            )
+
+        with cancel_col:
+            cancel_clicked = st.button(
+                "⛔ Cancel Upload",
+                use_container_width=True,
+                disabled=not batch_active,
+                key="cancel_upload_button",
+            )
+
+        if cancel_clicked and batch is not None:
+            batch["cancel_event"].set()
+            st.warning(
+                "Cancellation requested. The current file may finish "
+                "before the remaining files are skipped."
+            )
+
+        if upload_clicked and authentication_available():
+            upload_items = [
+                (
+                    file.name,
+                    file.getvalue(),
+                    file.type or "application/octet-stream",
+                )
+                for file in uploaded_files
+            ]
+
+            batch = {
+                "lock": threading.Lock(),
+                "cancel_event": threading.Event(),
+                "done": False,
+                "cancelled": False,
+                "current_file": "",
+                "completed": 0,
+                "successful": 0,
+                "failed": 0,
+                "results": [],
+                "total": len(upload_items),
+            }
+
+            st.session_state["upload_batch"] = batch
+
+            request_url = f"{api_url}/documents/upload"
+            request_headers = api_headers()
+
+            def run_upload_batch():
+                for filename, content, content_type in upload_items:
+                    # Do not start another file after cancellation.
+                    if batch["cancel_event"].is_set():
+                        break
+
+                    with batch["lock"]:
+                        batch["current_file"] = filename
+
+                    try:
+                        response = requests.post(
+                            request_url,
+                            headers=request_headers,
+                            files={
+                                "file": (
+                                    filename,
+                                    content,
+                                    content_type,
+                                )
+                            },
+                            timeout=180,
+                        )
+
+                        if response.ok:
+                            data = response.json()
+                            result = (
+                                "success",
+                                f"Indexed: "
+                                f"{data.get('source', filename)} "
+                                f"({data.get('chunk_count', 0)} chunks)",
+                            )
+                        else:
+                            result = (
+                                "error",
+                                f"Failed: {filename} "
+                                f"(HTTP {response.status_code})",
+                            )
+
+                    except requests.RequestException as exc:
+                        result = (
+                            "error",
+                            f"Connection error for {filename}: {exc}",
+                        )
+                    except ValueError:
+                        result = (
+                            "error",
+                            f"Invalid response received for {filename}.",
+                        )
+
+                    with batch["lock"]:
+                        batch["results"].append(result)
+                        batch["completed"] += 1
+
+                        if result[0] == "success":
+                            batch["successful"] += 1
+                        else:
+                            batch["failed"] += 1
+
+                with batch["lock"]:
+                    batch["cancelled"] = batch["cancel_event"].is_set()
+                    batch["current_file"] = ""
+                    batch["done"] = True
+
+            threading.Thread(
+                target=run_upload_batch,
+                daemon=True,
+            ).start()
+
+            st.rerun(scope="fragment")
+
+        # Render progress and results
+        batch = st.session_state.get("upload_batch")
+
+        if batch is not None:
+            with batch["lock"]:
+                total = batch["total"]
+                completed = batch["completed"]
+                successful = batch["successful"]
+                failed = batch["failed"]
+                current_file = batch["current_file"]
+                done = batch["done"]
+                cancelled = batch["cancelled"]
+                results = list(batch["results"])
+
+            st.progress(completed / total if total else 0.0)
+
+            if not done:
+                st.info(
+                    f"Uploading {completed + 1}/{total}: "
+                    f"{current_file or 'Preparing next file...'}"
                 )
 
-                try:
-                    files = {
-                        "file": (
-                            uploaded_file.name,
-                            uploaded_file.getvalue(),
-                            uploaded_file.type or "application/octet-stream",
-                        )
-                    }
+            for result_type, message in results:
+                if result_type == "success":
+                    st.success(message)
+                else:
+                    st.error(message)
 
+            if done:
+                skipped = total - completed
 
-                    response = requests.post(
-                        f"{api_url}/documents/upload",
-                        headers=api_headers(),
-                        files=files,
-                        timeout=180,
+                if cancelled:
+                    st.warning(
+                        f"Upload cancelled: {successful} succeeded, "
+                        f"{failed} failed, {skipped} skipped."
+                    )
+                elif failed:
+                    st.warning(
+                        f"Batch complete: {successful} succeeded, "
+                        f"{failed} failed."
+                    )
+                else:
+                    st.success(
+                        f"Batch complete: all {successful} file(s) "
+                        "uploaded and indexed successfully."
                     )
 
-                    if response.ok:
-                        data = response.json()
-                        successful_uploads += 1
-
-                        st.success(
-                            f"Indexed: {data.get('source', uploaded_file.name)} "
-                            f"({data.get('chunk_count', 0)} chunks)"
-                        )
-                    else:
-                        failed_uploads += 1
-                        st.error(
-                            f"Failed: {uploaded_file.name} "
-                            f"(HTTP {response.status_code})"
-                        )
-
-                except requests.RequestException as exc:
-                    failed_uploads += 1
-                    st.error(
-                        f"Connection error for {uploaded_file.name}: {exc}"
+                if completed:
+                    st.info(
+                        "Click Refresh Documents to update the "
+                        "indexed document list."
                     )
 
-                progress_bar.progress((index + 1) / len(uploaded_files))
-
-            status_text.empty()
-            st.session_state.pop("documents", None)
-
-            if failed_uploads == 0:
-                st.success(
-                    f"Batch complete: {successful_uploads} file(s) "
-                    "uploaded and indexed successfully."
-                )
-            else:
-                st.warning(
-                    f"Batch complete: {successful_uploads} succeeded, "
-                    f"{failed_uploads} failed. Retry only the failed files."
-                )
-
-            st.info("Click Refresh Documents to update the indexed document list.")
-
-
+    render_upload_panel()
 
 # ============================================================
 # RIGHT: RAG Query
