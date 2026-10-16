@@ -93,7 +93,10 @@ FRONTEND_URL = get_secret(
     "https://enterprise-rag-frontend-g1bm.onrender.com",
 ).rstrip("/")
 
-
+PASSWORD_RESET_URL = get_secret(
+    "RAG_PASSWORD_RESET_URL",
+    "https://enterprise-rag-recovery.onrender.com",
+).rstrip("/")
 
 @st.cache_resource
 def get_supabase_client(session_id: str) -> Client | None:
@@ -530,9 +533,7 @@ def render_auth_page() -> None:
                                 supabase.auth.reset_password_for_email(
                                     email,
                                     {
-                                        "redirect_to": (
-                                            f"{FRONTEND_URL}/?mode=recovery"
-                                        )
+                                        "redirect_to": PASSWORD_RESET_URL,
                                     },
                                 )
 
