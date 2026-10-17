@@ -42,6 +42,25 @@ if not api_url:
 
 api_url = api_url.rstrip("/")
 
+
+import threading
+
+def _warm_backend():
+    """Start the Render backend as soon as the frontend opens."""
+    try:
+        requests.get(f"{api_url}/health", timeout=120)
+    except requests.RequestException:
+        pass
+
+
+if "backend_warm_started" not in st.session_state:
+    st.session_state.backend_warm_started = True
+    threading.Thread(
+        target=_warm_backend,
+        daemon=True,
+    ).start()
+
+
 def check_backend_health() -> str:
     """Check backend availability and trigger a Render cold start."""
     try:
